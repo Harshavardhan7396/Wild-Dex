@@ -1,0 +1,76 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account and onboarding profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Display name of explorer" },
+        "photoURL": { "type": "string", "description": "Profile avatar URL" },
+        "onboardingCompleted": { "type": "boolean", "description": "Whether onboarding questionnaire was completed" },
+        "experienceLevel": { "type": "string", "description": "Naturalist experience tier: novice, enthusiast, researcher" },
+        "favoriteTaxa": { "type": "string", "description": "Primary taxa focus area" },
+        "bio": { "type": "string", "description": "Explorer biography" },
+        "createdAt": { "type": "string", "description": "Account registration timestamp" },
+        "updatedAt": { "type": "string", "description": "Profile update timestamp" }
+      },
+      "required": ["id", "email", "displayName", "onboardingCompleted"]
+    },
+    "CollectionItem": {
+      "title": "CollectionItem",
+      "description": "A field specimen cataloged into the user's personal collection",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique specimen identifier" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "speciesId": { "type": "string", "description": "Species key or identifier" },
+        "commonName": { "type": "string", "description": "Vernacular name" },
+        "scientificName": { "type": "string", "description": "Binomial scientific name" },
+        "category": { "type": "string", "description": "Taxonomic kingdom or class" },
+        "confidence": { "type": "number", "description": "AI scanner confidence score" },
+        "photoUrl": { "type": "string", "description": "Permanent photo storage URL" },
+        "storagePath": { "type": "string", "description": "Firebase Storage path" },
+        "rarity": { "type": "string", "enum": ["Common", "Rare", "Legendary"], "description": "Rarity tier derived from conservation status" },
+        "conservationStatus": { "type": "string", "description": "IUCN conservation code (LC, VU, EN, CR, etc.)" },
+        "albumId": { "type": "string", "description": "Assigned album identifier or 'default'" },
+        "notes": { "type": "string", "description": "Field notes entered by user" },
+        "location": { "type": "object", "description": "Optional geolocation coordinates and place name" },
+        "createdAt": { "type": "string", "description": "Cataloging timestamp" },
+        "updatedAt": { "type": "string", "description": "Last edit timestamp" }
+      },
+      "required": ["id", "userId", "commonName", "scientificName", "photoUrl", "rarity", "albumId"]
+    },
+    "Album": {
+      "title": "Album",
+      "description": "User album or expedition collection folder",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique album ID" },
+        "userId": { "type": "string", "description": "Owner user UID" },
+        "name": { "type": "string", "description": "Album name" },
+        "description": { "type": "string", "description": "Album description" },
+        "coverPhotoUrl": { "type": "string", "description": "Album thumbnail cover photo" },
+        "itemCount": { "type": "number", "description": "Number of items in album" },
+        "createdAt": { "type": "string", "description": "Album creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Album modification timestamp" }
+      },
+      "required": ["id", "userId", "name"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile records containing account credentials and preferences"
+    },
+    "/users/{userId}/collection/{itemId}": {
+      "schema": "CollectionItem",
+      "description": "Cataloged specimens owned exclusively by the authenticated user"
+    },
+    "/albums/{albumId}": {
+      "schema": "Album",
+      "description": "Expedition albums organizing specimens belonging to user"
+    }
+  }
+}

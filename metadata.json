@@ -1,0 +1,9 @@
+{
+  "name": "WildDex",
+  "description": "WildDex: Global species encyclopedia, instant AI specimen scanner, field collection dex, and naturalist network.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
