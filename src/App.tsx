@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 import { HomePage } from './pages/HomePage';
@@ -16,16 +16,78 @@ import { InviteFriendsPage } from './pages/InviteFriendsPage';
 import { SharedCollectionPage } from './pages/SharedCollectionPage';
 import { LeaderboardPage } from './pages/LeaderboardPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { LoginPage } from './pages/LoginPage';
 
-import { AuthProvider } from './contexts/AuthContext';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
+import { SplashScreen } from './components/auth/SplashScreen';
 
-export default function App() {
+function AppContent() {
+  const { currentUser, loading: authLoading, isGuest } = useAuth();
+  const [showSplash, setShowSplash] = useState(true);
+  const [isExitingSplash, setIsExitingSplash] = useState(false);
+  const mountTimeRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    // Minimum 2000ms, maximum 3000ms
+    const MIN_SPLASH_TIME = prefersReducedMotion ? 400 : 2000;
+    const MAX_SPLASH_TIME = 3000;
+
+    let exitTimeout: NodeJS.Timeout | null = null;
+    let minTimer: NodeJS.Timeout | null = null;
+    let maxTimer: NodeJS.Timeout | null = null;
+
+    const dismissSplash = () => {
+      if (prefersReducedMotion) {
+        setShowSplash(false);
+      } else {
+        setIsExitingSplash(true);
+        exitTimeout = setTimeout(() => {
+          setShowSplash(false);
+        }, 300);
+      }
+    };
+
+    // Hard ceiling: dismiss after 3 seconds maximum
+    maxTimer = setTimeout(() => {
+      dismissSplash();
+    }, MAX_SPLASH_TIME);
+
+    // Keep visible until Supabase session check finishes, with minimum 2 seconds
+    if (!authLoading) {
+      const elapsed = Date.now() - mountTimeRef.current;
+      const waitRemaining = Math.max(0, MIN_SPLASH_TIME - elapsed);
+      minTimer = setTimeout(() => {
+        dismissSplash();
+      }, waitRemaining);
+    }
+
+    return () => {
+      if (minTimer) clearTimeout(minTimer);
+      if (maxTimer) clearTimeout(maxTimer);
+      if (exitTimeout) clearTimeout(exitTimeout);
+    };
+  }, [authLoading]);
+
+  // 1. Show Splash on fresh page load (with smooth exit fade)
+  if (showSplash) {
+    return <SplashScreen isExiting={isExitingSplash} />;
+  }
+
+  // 2. If nobody is signed in after splash and user has not chosen guest mode, show LoginPage
+  if (!currentUser && !isGuest) {
+    return <LoginPage />;
+  }
+
+  // 3. User is signed in or continuing as guest -> full app experience
   return (
-    <AuthProvider>
-      <HashRouter>
-        <AuthModal />
-        <Routes>
+    <HashRouter>
+      <AuthModal />
+      <Routes>
         <Route element={<AppLayout />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/explore" element={<ExplorePage />} />
@@ -46,6 +108,13 @@ export default function App() {
         </Route>
       </Routes>
     </HashRouter>
-  </AuthProvider>
-);
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
 }

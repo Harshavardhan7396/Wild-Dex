@@ -31,6 +31,8 @@ interface AuthContextType {
   currentUser: AuthUser | null;
   userProfile: UserProfile | null;
   loading: boolean;
+  isGuest: boolean;
+  continueAsGuest: () => void;
   authModalOpen: boolean;
   setAuthModalOpen: (open: boolean) => void;
   signInWithGoogle: () => Promise<AuthUser | null>;
@@ -46,6 +48,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [isGuest, setIsGuest] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('wilddex_guest_session') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const continueAsGuest = () => {
+    setIsGuest(true);
+    try {
+      sessionStorage.setItem('wilddex_guest_session', 'true');
+    } catch {}
+  };
 
   const mapSupabaseUser = (sbUser: SupabaseUser): AuthUser => {
     const meta = sbUser.user_metadata || {};
@@ -227,6 +243,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
       setCurrentUser(null);
       setUserProfile(null);
+      setIsGuest(false);
+      try {
+        sessionStorage.removeItem('wilddex_guest_session');
+      } catch {}
     } catch (err) {
       console.error('Logout error:', err);
     }
@@ -265,6 +285,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         userProfile,
         loading,
+        isGuest,
+        continueAsGuest,
         authModalOpen,
         setAuthModalOpen,
         signInWithGoogle,
