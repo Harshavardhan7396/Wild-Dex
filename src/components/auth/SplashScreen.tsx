@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { WildDexLogo } from '../common/WildDexLogo';
 
 interface SplashScreenProps {
   isExiting?: boolean;
@@ -54,8 +55,6 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ isExiting = false })
     };
   }, [prefersReducedMotion]);
 
-  const logoUrl =
-    'https://lh3.googleusercontent.com/aida/AEtjO1XWQm038pDedq78nXFB7mnJRppOQcmQjE8--gIYVIlNhli39pxsV8VKjjPXVF6xg_BL4lbadHXwpDRfL0dNx2ncwOKCOTxcXnHsPkQH_2H8haYHl6i9E-IrdpxAkHnMTSbrqzAV7C4_AuzN1ZNGXK7Kt43CIRtco2kz6MN15UZAdVxbLdXQFgq4FmUiLb6RsnQRS4OW4QvR20ANuxkkNIBCgRR1OfQP-L3tID2xbUMqJDrtJWa0hDZk6KFJ';
 
   return (
     <div
@@ -120,13 +119,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({ isExiting = false })
           <div className="absolute -inset-6 rounded-full bg-gradient-to-tr from-[#40916c]/30 to-emerald-300/25 blur-2xl" />
           <div className="absolute -inset-2 rounded-full border border-[#52b788]/20" />
 
-          {/* Rendered Vector Logo Emblem */}
-          <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center p-1 bg-[#132a13]/60 rounded-full backdrop-blur-md shadow-2xl ring-1 ring-[#52b788]/30">
-            <img
-              src={logoUrl}
-              alt="WildDex Logo Emblem"
-              className="w-full h-full object-contain drop-shadow-[0_8px_16px_rgba(0,0,0,0.45)]"
-            />
+          {/* Rendered Vector Logo Emblem as Inline SVG */}
+          <div className="relative w-32 h-32 sm:w-36 sm:h-36 flex items-center justify-center p-1 bg-[#132a13]/60 rounded-full backdrop-blur-md shadow-2xl ring-1 ring-[#52b788]/30 overflow-hidden">
+            <WildDexLogo className="w-full h-full drop-shadow-[0_8px_16px_rgba(0,0,0,0.45)]" />
           </div>
         </div>
 

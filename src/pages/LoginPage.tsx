@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { WildDexLogo } from '../components/common/WildDexLogo';
 
 export const LoginPage: React.FC = () => {
   const { signInWithGoogle, continueAsGuest } = useAuth();
@@ -22,9 +23,6 @@ export const LoginPage: React.FC = () => {
       setLoading(false);
     }
   };
-
-  const logoUrl =
-    'https://lh3.googleusercontent.com/aida/AEtjO1XWQm038pDedq78nXFB7mnJRppOQcmQjE8--gIYVIlNhli39pxsV8VKjjPXVF6xg_BL4lbadHXwpDRfL0dNx2ncwOKCOTxcXnHsPkQH_2H8haYHl6i9E-IrdpxAkHnMTSbrqzAV7C4_AuzN1ZNGXK7Kt43CIRtco2kz6MN15UZAdVxbLdXQFgq4FmUiLb6RsnQRS4OW4QvR20ANuxkkNIBCgRR1OfQP-L3tID2xbUMqJDrtJWa0hDZk6KFJ';
 
   const collageImg =
     'https://lh3.googleusercontent.com/aida-public/AB6AXuC4hwOdR9hp5RHvj9IfjLwfa9xIxn2vjXW4hQZ9ZuP1PsyRffqhOrTrl4-JUSXrMQ1DspDaB1LcoZf3s2DWtol-04Jqmk86MWX_dGClszqQzoz9uFY4uuUoHjf0aglX2sok0f0xvmjFZuGJjBhyqaXyngGrNg59R-5tywDbOfWuMwnWE96ID9oueMxiMP1acV1qtRw5DrWaBHx4oI3ORnP-7FPTfMeGrF_BpnMXJmSl8TymzrfrPldAHg';
@@ -52,7 +50,7 @@ export const LoginPage: React.FC = () => {
           <div className="relative z-10 flex items-center justify-between">
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#081c15]/75 backdrop-blur-md border border-white/15 text-white shadow-sm">
               <div className="w-6 h-6 rounded-full overflow-hidden bg-[#2d6a4f] flex items-center justify-center p-0.5">
-                <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
+                <WildDexLogo className="w-full h-full" />
               </div>
               <span className="font-semibold text-xs tracking-wider uppercase text-[#d8f3dc]">
                 WildDex Explorer
@@ -84,8 +82,8 @@ export const LoginPage: React.FC = () => {
         <div className="lg:col-span-5 bg-[#FAF7F0] flex flex-col justify-between p-6 sm:p-10 md:p-12">
           {/* Top Brand Header: Small Logo + Wordmark */}
           <div className="flex items-center justify-center lg:justify-start gap-2.5 pt-1">
-            <div className="w-9 h-9 rounded-full overflow-hidden bg-[#1b4332] flex items-center justify-center shadow-sm ring-1 ring-[#40916c]/20">
-              <img src={logoUrl} alt="WildDex Icon" className="w-full h-full object-contain p-0.5" />
+            <div className="w-9 h-9 rounded-full overflow-hidden bg-[#1b4332] flex items-center justify-center shadow-sm ring-1 ring-[#40916c]/20 p-0.5">
+              <WildDexLogo className="w-full h-full" />
             </div>
             <span className="font-extrabold text-2xl tracking-tight text-[#1b4332]">
               Wild<span className="text-[#40916c]">Dex</span>
