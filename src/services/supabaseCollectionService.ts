@@ -1,5 +1,6 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import { EnrichedSpecimenScanResult } from './scannerService';
+import { CURATED_SPECIES } from './speciesService';
 
 export interface CollectionItem {
   id: string;
@@ -121,12 +122,12 @@ export async function getSignedPhotoUrl(photoPath: string): Promise<string> {
   try {
     const { data, error } = await supabase.storage.from('scans').createSignedUrl(photoPath, 3600);
     if (error || !data?.signedUrl) {
-      console.warn('Could not generate signed URL for path:', photoPath, error);
+      console.error('[Supabase Storage Error] Could not generate signed URL for path:', photoPath, error);
       return '';
     }
     return data.signedUrl;
   } catch (err) {
-    console.error('Error in getSignedPhotoUrl:', err);
+    console.error('[Supabase Storage Error] Exception in getSignedPhotoUrl:', err);
     return '';
   }
 }
@@ -151,13 +152,33 @@ export async function addSpecimenToSupabase(params: {
   } = params;
 
   if (!isSupabaseConfigured) {
-    throw new Error('Supabase is not configured. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your environment.');
+    const configErr = new Error('Supabase is not configured. Please add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your environment.');
+    console.error('[Supabase Configuration Error]:', configErr);
+    throw configErr;
   }
 
-  // 1. Generate unique UUID for item
-  const itemId = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  // Derive active session user ID to guarantee matching auth.uid() in Supabase RLS
+  let authUserId = userId;
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user?.id) {
+      authUserId = session.user.id;
+    }
+  } catch (authErr) {
+    console.warn('[Supabase Auth Warning] Error getting session in addSpecimenToSupabase:', authErr);
+  }
+
+  // 1. Generate valid RFC4122 UUID for item
+  const itemId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+          const r = (Math.random() * 16) | 0;
+          const v = c === 'x' ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        });
   const photoFilename = `${itemId}.jpg`;
-  const photoPath = `${userId}/${photoFilename}`;
+  const photoPath = `${authUserId}/${photoFilename}`;
 
   // 2. Compress photo to max 1024px before storage upload
   const compressedBase64 = await compressImageToMax1024(photoDataUrl);
@@ -174,13 +195,13 @@ export async function addSpecimenToSupabase(params: {
       });
 
     if (uploadError) {
-      console.warn('Supabase storage upload error:', uploadError);
+      console.error('[Supabase Storage Upload Error]:', uploadError);
     } else {
       const generated = await getSignedPhotoUrl(photoPath);
       if (generated) signedUrl = generated;
     }
   } catch (err) {
-    console.warn('Storage upload encountered an issue, using compressed fallback:', err);
+    console.error('[Supabase Storage Upload Exception]:', err);
   }
 
   // 4. Obtain location coordinates if permitted
@@ -218,12 +239,11 @@ export async function addSpecimenToSupabase(params: {
   const rarity = deriveRarityTier(scanResult.conservationStatusCode);
 
   // Prepare database record for collection_items table
-  // If albumId is 'default' or unselected, store null for foreign key
   const validAlbumId = albumId && albumId !== 'default' && albumId !== 'all' ? albumId : null;
 
   const dbRow = {
     id: itemId,
-    owner_id: userId,
+    owner_id: authUserId,
     album_id: validAlbumId,
     species_name: scanResult.commonName,
     scientific_name: scanResult.scientificName,
@@ -241,14 +261,14 @@ export async function addSpecimenToSupabase(params: {
     .insert([dbRow]);
 
   if (insertError) {
-    console.error('Failed to insert collection_item to Supabase:', insertError);
+    console.error('[Supabase Insert Error]: Failed to insert collection_item to Supabase:', insertError);
     throw new Error(insertError.message || 'Could not save specimen to collection.');
   }
 
   const newItem: CollectionItem = {
     id: itemId,
-    userId,
-    ownerId: userId,
+    userId: authUserId,
+    ownerId: authUserId,
     speciesId: scanResult.scientificName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     commonName: scanResult.commonName,
     scientificName: scanResult.scientificName,
@@ -273,6 +293,12 @@ export async function addSpecimenToSupabase(params: {
     updatedAt: dbRow.created_at,
   };
 
+  // Dispatch refresh events across the application so collection views refresh without reload
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('wilddex:collection_updated', { detail: newItem }));
+    window.dispatchEvent(new CustomEvent('wilddex:item_saved', { detail: newItem }));
+  }
+
   return newItem;
 }
 
@@ -282,29 +308,66 @@ export const addSpecimenToFirebase = addSpecimenToSupabase;
 /**
  * Fetch all items in user's collection from collection_items
  */
-export async function getSupabaseUserCollection(userId: string): Promise<CollectionItem[]> {
-  if (!isSupabaseConfigured) return [];
+export async function getSupabaseUserCollection(userId?: string): Promise<CollectionItem[]> {
+  if (!isSupabaseConfigured) {
+    console.warn('[Supabase Collection] Supabase is not configured yet. Returning empty list.');
+    return [];
+  }
   try {
+    // Derive active session user ID to ensure exact match with auth.uid() in Supabase RLS
+    let authUserId = userId;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        authUserId = session.user.id;
+      }
+    } catch (authErr) {
+      console.warn('[Supabase Auth Warning] Error retrieving session in getSupabaseUserCollection:', authErr);
+    }
+
+    if (!authUserId) {
+      console.warn('[Supabase Query Warning] No authenticated user ID available for collection query.');
+      return [];
+    }
+
     const { data, error } = await supabase
       .from('collection_items')
       .select('*')
-      .eq('owner_id', userId)
+      .eq('owner_id', authUserId)
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error fetching collection_items from Supabase:', error);
+      console.error('[Supabase Query Error] Failed to fetch collection_items from Supabase:', error);
       throw error;
     }
 
     if (!data || data.length === 0) return [];
 
-    // Resolve signed URLs for all items
+    // Resolve signed URLs for all items and ensure failed photos never hide items
     const items: CollectionItem[] = await Promise.all(
       data.map(async (row: any) => {
         let photoUrl = '';
         if (row.photo_path) {
-          photoUrl = await getSignedPhotoUrl(row.photo_path);
+          try {
+            photoUrl = await getSignedPhotoUrl(row.photo_path);
+          } catch (photoErr) {
+            console.error('[Supabase Storage Error] Exception getting signed photo URL for row:', row.photo_path, photoErr);
+          }
         }
+
+        // Rule 4: If signed URL creation failed or path is unreachable, provide reliable fallback
+        // so that a failed photo NEVER hides the item
+        if (!photoUrl) {
+          const matchedCurated = CURATED_SPECIES.find(
+            (c) =>
+              c.scientificName.toLowerCase() === row.scientific_name?.toLowerCase() ||
+              c.commonName.toLowerCase() === row.species_name?.toLowerCase()
+          );
+          photoUrl =
+            matchedCurated?.photoUrl ||
+            'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz';
+        }
+
         return {
           id: row.id,
           userId: row.owner_id,
@@ -314,10 +377,10 @@ export async function getSupabaseUserCollection(userId: string): Promise<Collect
           scientificName: row.scientific_name,
           category: row.category,
           confidence: row.confidence,
-          photoUrl: photoUrl || '',
+          photoUrl: photoUrl,
           photoPath: row.photo_path,
           storagePath: row.photo_path,
-          rarity: row.rarity as 'Common' | 'Rare' | 'Legendary',
+          rarity: (row.rarity as 'Common' | 'Rare' | 'Legendary') || 'Common',
           conservationStatus: row.rarity === 'Legendary' ? 'CR' : row.rarity === 'Rare' ? 'EN' : 'LC',
           albumId: row.album_id || 'default',
           location:
@@ -336,7 +399,7 @@ export async function getSupabaseUserCollection(userId: string): Promise<Collect
 
     return items;
   } catch (err) {
-    console.error('getSupabaseUserCollection error:', err);
+    console.error('[Supabase Collection Error] getSupabaseUserCollection failed:', err);
     throw err;
   }
 }

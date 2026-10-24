@@ -59,6 +59,7 @@ export const ScannerPage: React.FC = () => {
   const [saveNotes, setSaveNotes] = useState('');
   const [includeGps, setIncludeGps] = useState(true);
   const [isSavingToDex, setIsSavingToDex] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [selectedAlbumId, setSelectedAlbumId] = useState('default');
   const [userAlbums, setUserAlbums] = useState<FirebaseAlbum[]>([]);
   const [selectedTestCaseId, setSelectedTestCaseId] = useState<string | null>(null);
@@ -294,12 +295,14 @@ export const ScannerPage: React.FC = () => {
       return;
     }
 
+    setSaveError(null);
     setShowSaveModal(true);
   };
 
   const handleConfirmSaveToFirebase = async () => {
     if (!currentUser) return;
     setIsSavingToDex(true);
+    setSaveError(null);
     try {
       const bestPhoto =
         capturedImage ||
@@ -321,8 +324,11 @@ export const ScannerPage: React.FC = () => {
       setShowSaveModal(false);
       showToast(`Saved ${scanResult.commonName} to My Collection!`);
     } catch (err: any) {
-      console.error('Error saving specimen to Firebase:', err);
-      showToast('Could not save. Please retry.');
+      console.error('[Supabase Save Error] Failed to save specimen to Supabase:', err);
+      setSaveError(
+        err?.message ||
+          'Could not save to Supabase database. Please check permissions and connection, then retry.'
+      );
     } finally {
       setIsSavingToDex(false);
     }
@@ -1200,6 +1206,26 @@ export const ScannerPage: React.FC = () => {
                 className="w-full p-2.5 rounded-xl bg-surface-container border border-outline-variant/40 text-on-surface font-body-sm text-xs resize-none"
               />
             </div>
+
+            {/* Visible Error Message with Retry Button (Requirement 1: No silent failures) */}
+            {saveError && (
+              <div className="p-3.5 rounded-2xl bg-error-container text-on-error-container text-xs flex flex-col gap-2 border border-error/30 animate-in fade-in">
+                <div className="flex items-start gap-2">
+                  <span className="material-symbols-outlined text-[18px] text-error shrink-0 mt-0.5">error</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-on-error-container">Could Not Save Specimen</p>
+                    <p className="opacity-90 mt-0.5 leading-relaxed">{saveError}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleConfirmSaveToFirebase}
+                  className="self-end px-3.5 py-1.5 rounded-full bg-error text-on-error font-bold text-[11px] shadow-sm hover:opacity-90 active:scale-95 transition-all"
+                >
+                  Retry Save
+                </button>
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex items-center gap-2 pt-2">

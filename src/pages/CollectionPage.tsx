@@ -6,6 +6,7 @@ import { InfoTooltip } from '../components/common/InfoTooltip';
 import {
   FirebaseCollectionItem,
   FirebaseAlbum,
+  getFirebaseUserCollection,
   subscribeToFirebaseUserCollection,
   subscribeToFirebaseUserAlbums,
   deleteSpecimenFromFirebase,
@@ -48,7 +49,32 @@ export const CollectionPage: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Setup real-time listeners to Firestore
+  // Direct fetch function with visible error handling
+  const loadData = useCallback(async () => {
+    if (!currentUser) {
+      setLoading(false);
+      setSpecimens([]);
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const items = await getFirebaseUserCollection(currentUser.uid);
+      setSpecimens(items);
+      setLoading(false);
+    } catch (err: any) {
+      console.error('[Supabase Collection Error] Loading failed:', err);
+      setError(
+        err?.message ||
+          'Could not load your collection from Supabase. Please check your network and retry.'
+      );
+      setLoading(false);
+    }
+  }, [currentUser]);
+
+  // Setup initial load, real-time listeners & window events for immediate refresh
   useEffect(() => {
     if (!currentUser) {
       setLoading(false);
@@ -57,10 +83,15 @@ export const CollectionPage: React.FC = () => {
       return;
     }
 
-    setLoading(true);
-    setError(null);
-
+    loadData();
     ensureDefaultAlbum(currentUser.uid).catch(() => {});
+
+    // Requirement 5: Refresh collection list immediately when items are saved without a page reload
+    const handleCollectionUpdate = () => {
+      loadData();
+    };
+    window.addEventListener('wilddex:collection_updated', handleCollectionUpdate);
+    window.addEventListener('wilddex:item_saved', handleCollectionUpdate);
 
     let unsubCollection: (() => void) | null = null;
     let unsubAlbums: (() => void) | null = null;
@@ -74,8 +105,11 @@ export const CollectionPage: React.FC = () => {
           setError(null);
         },
         (err) => {
-          console.error('Subscription collection error:', err);
-          setError('Could not sync collection data. Please check connection and retry.');
+          console.error('[Supabase Subscription Error]:', err);
+          setError(
+            err?.message ||
+              'Could not sync collection data. Please check connection and retry.'
+          );
           setLoading(false);
         }
       );
@@ -86,27 +120,30 @@ export const CollectionPage: React.FC = () => {
           setAlbums(albumList);
         },
         (err) => {
-          console.error('Subscription albums error:', err);
+          console.error('[Supabase Albums Subscription Error]:', err);
         }
       );
     } catch (e: any) {
+      console.error('[Supabase Listener Error]:', e);
       setError(e.message || 'Failed to initialize collection sync.');
       setLoading(false);
     }
 
     return () => {
+      window.removeEventListener('wilddex:collection_updated', handleCollectionUpdate);
+      window.removeEventListener('wilddex:item_saved', handleCollectionUpdate);
       if (unsubCollection) unsubCollection();
       if (unsubAlbums) unsubAlbums();
     };
-  }, [currentUser]);
+  }, [currentUser, loadData]);
 
-  // Handle retry
+  // Handle retry (Requirement 1: visible error message with retry button)
   const handleRetry = useCallback(() => {
-    if (!currentUser) return;
-    setLoading(true);
-    setError(null);
-    ensureDefaultAlbum(currentUser.uid).catch(() => {});
-  }, [currentUser]);
+    loadData();
+    if (currentUser) {
+      ensureDefaultAlbum(currentUser.uid).catch(() => {});
+    }
+  }, [loadData, currentUser]);
 
   // Move specimen action
   const handleExecuteMove = async () => {
@@ -500,7 +537,14 @@ export const CollectionPage: React.FC = () => {
                     <img
                       alt={item.commonName}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform"
-                      src={item.photoUrl}
+                      src={
+                        item.photoUrl ||
+                        'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz'
+                      }
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src =
+                          'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz';
+                      }}
                     />
 
                     {/* Rarity Tier Badge */}
