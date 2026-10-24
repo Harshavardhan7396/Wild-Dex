@@ -47,7 +47,7 @@ export const SpeciesDetailPage: React.FC = () => {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
         <span className="material-symbols-outlined text-[36px] text-primary animate-spin">progress_activity</span>
-        <p className="font-label-md text-label-md text-on-surface-variant">Loading taxonomy dossier...</p>
+        <p className="font-label-md text-label-md text-on-surface-variant">Loading Family Tree dossier...</p>
       </div>
     );
   }

@@ -108,7 +108,7 @@ export const LifecyclePage: React.FC = () => {
         </div>
       )}
 
-      {/* Top Taxonomy & Breadcrumb Header */}
+      {/* Top Family Tree & Breadcrumb Header */}
       <div className="flex flex-col pt-space-xs space-y-space-xs">
         <div className="flex items-center gap-1.5 text-secondary">
           <span className="material-symbols-outlined text-[16px]">all_inclusive</span>

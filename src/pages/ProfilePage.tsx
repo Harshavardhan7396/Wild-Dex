@@ -172,15 +172,15 @@ export const ProfilePage: React.FC = () => {
         <div className="p-space-md rounded-3xl bg-surface-container-high shadow-sm flex flex-col gap-3 border border-outline-variant/20">
           <div className="flex items-center gap-4">
             <div className="relative shrink-0">
-              {currentUser.photoURL ? (
+              {(userProfile?.photoURL || currentUser.photoURL) ? (
                 <img
-                  alt={currentUser.displayName || 'Explorer'}
-                  src={currentUser.photoURL}
+                  alt={userProfile?.displayName || currentUser.displayName || 'Explorer'}
+                  src={userProfile?.photoURL || currentUser.photoURL}
                   className="w-16 h-16 rounded-full object-cover ring-4 ring-primary-fixed shadow-md"
                 />
               ) : (
-                <div className="w-16 h-16 rounded-full bg-primary-container text-on-primary flex items-center justify-center ring-4 ring-primary-fixed shadow-md">
-                  <span className="material-symbols-outlined text-[32px]">person</span>
+                <div className="w-16 h-16 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-2xl ring-4 ring-primary-fixed shadow-md">
+                  {(userProfile?.displayName || currentUser.displayName || 'E').charAt(0).toUpperCase()}
                 </div>
               )}
               <span className="absolute bottom-0 right-0 w-4 h-4 rounded-full bg-secondary ring-2 ring-surface"></span>
@@ -189,12 +189,12 @@ export const ProfilePage: React.FC = () => {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">
                 <h1 className="font-headline-sm text-headline-sm text-on-surface font-bold truncate">
-                  {currentUser.displayName || userProfile?.displayName || 'Wild Explorer'}
+                  {userProfile?.displayName || currentUser.displayName || 'Wild Explorer'}
                 </h1>
                 <span className="material-symbols-outlined text-[18px] text-secondary">verified</span>
               </div>
               <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
-                {userProfile?.location || 'Field Observer'} • {currentUser.email}
+                {userProfile?.location || 'Field Observer'} • {currentUser.email || userProfile?.email}
               </p>
               <div className="flex items-center gap-2 mt-1">
                 <span className="px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-bold capitalize">
@@ -217,7 +217,7 @@ export const ProfilePage: React.FC = () => {
               <span className="font-headline-sm text-headline-sm text-primary font-bold">
                 {totalLogged}
               </span>
-              <p className="font-label-sm text-[10px] text-on-surface-variant">Taxa Logged</p>
+              <p className="font-label-sm text-[10px] text-on-surface-variant">Species Found</p>
             </div>
             <div className="p-2 rounded-2xl bg-surface-container-lowest">
               <span className="font-headline-sm text-headline-sm text-secondary font-bold">
@@ -259,7 +259,7 @@ export const ProfilePage: React.FC = () => {
         >
           <div className="flex items-center gap-2.5">
             <span className="material-symbols-outlined text-primary text-[22px]">collections_bookmark</span>
-            <span className="font-label-md text-label-md font-bold text-on-surface">My Dex</span>
+            <span className="font-label-md text-label-md font-bold text-on-surface">My Collection</span>
           </div>
           <span className="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
         </Link>
@@ -278,7 +278,7 @@ export const ProfilePage: React.FC = () => {
             }`}
             type="button"
           >
-            {tab}
+            {tab === 'taxonomy' ? 'Family Tree' : tab}
           </button>
         ))}
       </div>
@@ -354,11 +354,11 @@ export const ProfilePage: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 3: Taxonomy Coverage */}
+      {/* Tab 3: Family Tree Coverage */}
       {activeTab === 'taxonomy' && (
         <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <h3 className="font-headline-sm text-headline-sm text-on-surface">Taxonomic Distribution</h3>
+            <h3 className="font-headline-sm text-headline-sm text-on-surface">Family Tree Distribution</h3>
             <span className="font-label-sm text-label-sm text-secondary font-semibold">
               {totalLogged} Recorded Specimen(s)
             </span>

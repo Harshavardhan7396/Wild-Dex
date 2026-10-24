@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 
 export const AuthModal: React.FC = () => {
-  const { authModalOpen, setAuthModalOpen, signInWithGoogle } = useAuth();
+  const { authModalOpen, setAuthModalOpen, signInWithGoogle, isConfigured } = useAuth();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,9 +45,18 @@ export const AuthModal: React.FC = () => {
             Sign in to WildDex
           </h2>
           <p className="font-body-sm text-xs text-on-surface-variant mt-1.5 leading-relaxed">
-            Connect with Google to catalog specimens into your personal Cloud Dex, organize field albums, and track biodiversity achievements.
+            Connect with Google to catalog specimens into your personal Cloud Collection, organize field albums, and track biodiversity achievements.
           </p>
         </div>
+
+        {!isConfigured && (
+          <div className="p-3 rounded-2xl bg-error-container text-on-error-container text-xs text-left flex items-start gap-2 border border-error/20">
+            <span className="material-symbols-outlined text-[18px] text-error shrink-0 mt-0.5">error</span>
+            <span>
+              Missing <strong>VITE_SUPABASE_URL</strong> or <strong>VITE_SUPABASE_ANON_KEY</strong>. Please configure your environment variables.
+            </span>
+          </div>
+        )}
 
         {error && (
           <div className="p-2.5 rounded-xl bg-error-container text-on-error-container text-xs text-left flex items-center gap-2">

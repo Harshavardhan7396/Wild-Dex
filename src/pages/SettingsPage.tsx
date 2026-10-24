@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
+  const { currentUser, userProfile, setAuthModalOpen } = useAuth();
   const [darkMode, setDarkMode] = useState(false);
   const [language, setLanguage] = useState('English');
   const [offlineDownloaded, setOfflineDownloaded] = useState(true);
@@ -203,13 +205,49 @@ export const SettingsPage: React.FC = () => {
       <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
         <h2 className="font-headline-sm text-headline-sm text-on-surface">Account & Data</h2>
 
-        <div className="flex items-center justify-between py-1">
-          <div>
-            <p className="font-label-md text-label-md font-bold text-on-surface">Google Sign-In Active</p>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">bodduharshavardhan41@gmail.com</p>
-          </div>
-          <span className="material-symbols-outlined text-secondary">verified_user</span>
-        </div>
+        {/* Real Profile Card */}
+        {(() => {
+          const displayName = userProfile?.displayName || currentUser?.displayName || 'Naturalist Explorer';
+          const email = currentUser?.email || userProfile?.email || 'No email attached';
+          const avatarUrl = userProfile?.photoURL || currentUser?.photoURL;
+
+          return (
+            <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-surface-container">
+              {avatarUrl ? (
+                <img
+                  src={avatarUrl}
+                  alt={displayName}
+                  className="w-12 h-12 rounded-full object-cover ring-2 ring-primary-fixed shadow-sm shrink-0"
+                />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-base ring-2 ring-primary-fixed shrink-0">
+                  {displayName.charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="font-label-lg font-bold text-on-surface truncate">{displayName}</p>
+                  {currentUser && (
+                    <span className="material-symbols-outlined text-[16px] text-secondary">verified</span>
+                  )}
+                </div>
+                <p className="font-body-sm text-body-sm text-on-surface-variant truncate">{email}</p>
+                <p className="font-label-sm text-[11px] text-primary font-medium mt-0.5">
+                  {currentUser ? 'Google Account Connected' : 'Guest Mode'}
+                </p>
+              </div>
+              {!currentUser && (
+                <button
+                  onClick={() => setAuthModalOpen(true)}
+                  type="button"
+                  className="px-3.5 py-1.5 rounded-full bg-primary text-on-primary font-label-sm text-xs font-bold shrink-0 hover:opacity-90"
+                >
+                  Sign In
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         <button
           onClick={() => showToast('Exporting saved items to JSON file...')}

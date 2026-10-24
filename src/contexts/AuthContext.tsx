@@ -36,6 +36,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<AuthUser | null>;
   logout: () => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => Promise<void>;
+  isConfigured: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -60,17 +61,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Sync user profile document from Supabase profiles table
   const fetchUserProfile = async (authUser: AuthUser) => {
     if (!isSupabaseConfigured) {
-      setUserProfile({
-        id: authUser.id,
-        email: authUser.email || '',
-        displayName: authUser.displayName || 'Nature Explorer',
-        photoURL: authUser.photoURL || '',
-        onboardingCompleted: true,
-        experienceLevel: 'enthusiast',
-        favoriteTaxa: 'All Kingdoms',
-        bio: 'Exploring biodiversity with WildDex.',
-        location: 'Field Research Site',
-      });
       return;
     }
 
@@ -86,11 +76,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
 
       if (data) {
+        const resolvedName = data.display_name || authUser.displayName;
+        const resolvedPhoto = data.avatar_url || authUser.photoURL;
+        setCurrentUser((prev) =>
+          prev
+            ? {
+                ...prev,
+                displayName: resolvedName || prev.displayName,
+                photoURL: resolvedPhoto !== undefined ? resolvedPhoto : prev.photoURL,
+              }
+            : prev
+        );
         setUserProfile({
           id: data.id,
           email: authUser.email || '',
-          displayName: data.display_name || authUser.displayName || 'Nature Explorer',
-          photoURL: data.avatar_url || authUser.photoURL || '',
+          displayName: resolvedName || 'Nature Explorer',
+          photoURL: resolvedPhoto || '',
           onboardingCompleted: true,
           experienceLevel: 'enthusiast',
           favoriteTaxa: 'All Kingdoms',
@@ -189,18 +190,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signInWithGoogle = async (): Promise<AuthUser | null> => {
     if (!isSupabaseConfigured) {
-      // Mock local session for preview before environment variables are provided
-      const mockUser: AuthUser = {
-        id: 'usr_local_preview',
-        uid: 'usr_local_preview',
-        email: 'explorer@example.com',
-        displayName: 'Local Explorer',
-        photoURL: '',
-      };
-      setCurrentUser(mockUser);
-      await fetchUserProfile(mockUser);
-      setAuthModalOpen(false);
-      return mockUser;
+      const err = new Error(
+        'Supabase configuration missing: VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing. Please set these environment variables.'
+      );
+      console.error(err);
+      throw err;
     }
 
     try {
@@ -208,6 +202,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
+          queryParams: {
+            prompt: 'select_account',
+          },
         },
       });
 
@@ -273,6 +270,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signInWithGoogle,
         logout,
         updateUserProfile,
+        isConfigured: isSupabaseConfigured,
       }}
     >
       {children}

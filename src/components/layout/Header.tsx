@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface HeaderProps {
   title?: string;
@@ -11,6 +12,9 @@ export const Header: React.FC<HeaderProps> = ({
   locationName = 'Pacific Northwest',
 }) => {
   const location = useLocation();
+  const { currentUser, userProfile, setAuthModalOpen } = useAuth();
+  const displayName = userProfile?.displayName || currentUser?.displayName || 'Explorer';
+  const avatarUrl = userProfile?.photoURL || currentUser?.photoURL;
   const [moreOpen, setMoreOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const moreDropdownRef = useRef<HTMLDivElement | null>(null);
@@ -246,17 +250,36 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="material-symbols-outlined text-[22px]">notifications</span>
             <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-tertiary ring-2 ring-surface"></span>
           </button>
-          <Link
-            aria-label="User Profile"
-            to="/profile"
-            className="w-10 h-10 flex items-center justify-center rounded-full active:scale-95 transition-transform shrink-0"
-          >
-            <img
-              alt="Maya Explorer"
-              className="w-8 h-8 rounded-full object-cover ring-2 ring-primary-fixed"
-              src="https://lh3.googleusercontent.com/aida-public/AB6AXuDcBNCRwdxnRGutog3iWlzAlwo2Jv2I-i6Du7jPoDoBLomRiuiFZ0Umxl9SIIPLFBgTDbochoQpFNAlHlzhQMFbxcdIflya5r1nrOzhzYLREmb8c6Ox0vGAGBpMhsMCdLb3g3cxqK5KmFMuEEi3ruvDXRElG0oGmvT5MHB14dzFJ6mKa18vTmcfXtVfK7sEeP7qnD94gB1wqLZxfXrlgFKmfRF171yltZ9-pt39F064NxcCuCovj8tqlQ"
-            />
-          </Link>
+          {currentUser ? (
+            <Link
+              aria-label="User Profile"
+              to="/profile"
+              className="w-10 h-10 flex items-center justify-center rounded-full active:scale-95 transition-transform shrink-0"
+            >
+              {avatarUrl ? (
+                <img
+                  alt={displayName}
+                  className="w-8 h-8 rounded-full object-cover ring-2 ring-primary-fixed"
+                  src={avatarUrl}
+                />
+              ) : (
+                <div className="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-xs ring-2 ring-primary-fixed">
+                  {displayName.charAt(0).toUpperCase()}
+                </div>
+              )}
+            </Link>
+          ) : (
+            <button
+              aria-label="Sign In"
+              type="button"
+              onClick={() => setAuthModalOpen(true)}
+              className="w-10 h-10 flex items-center justify-center rounded-full active:scale-95 transition-transform shrink-0"
+            >
+              <div className="w-8 h-8 rounded-full bg-surface-container-high text-on-surface-variant flex items-center justify-center ring-2 ring-outline-variant/30">
+                <span className="material-symbols-outlined text-[18px]">person</span>
+              </div>
+            </button>
+          )}
         </div>
       </div>
 
