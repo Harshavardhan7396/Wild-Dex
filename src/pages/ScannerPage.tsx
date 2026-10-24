@@ -19,7 +19,7 @@ import {
   addSpecimenToFirebase,
   getFirebaseUserAlbums,
   FirebaseAlbum,
-} from '../services/firebaseCollectionService';
+} from '../services/supabaseCollectionService';
 import { InfoTooltip } from '../components/common/InfoTooltip';
 import {
   formatConservationStatus,

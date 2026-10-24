@@ -13,7 +13,7 @@ import {
   createFirebaseAlbum,
   deleteFirebaseAlbum,
   ensureDefaultAlbum,
-} from '../services/firebaseCollectionService';
+} from '../services/supabaseCollectionService';
 import { CURATED_SPECIES } from '../services/speciesService';
 
 export const CollectionPage: React.FC = () => {

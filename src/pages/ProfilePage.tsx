@@ -5,7 +5,7 @@ import { AuthPromptCard } from '../components/auth/AuthPromptCard';
 import {
   FirebaseCollectionItem,
   getFirebaseUserCollection,
-} from '../services/firebaseCollectionService';
+} from '../services/supabaseCollectionService';
 
 export const ProfilePage: React.FC = () => {
   const { currentUser, userProfile, logout, setAuthModalOpen } = useAuth();
