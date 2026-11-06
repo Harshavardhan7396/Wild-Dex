@@ -2,22 +2,97 @@ import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 
 export const LoginScreen: React.FC = () => {
-  const { signInWithGoogle, isConfigured } = useAuth();
+  const { signUpWithEmail, signInWithEmail, isConfigured } = useAuth();
+  const [mode, setMode] = useState<'signup' | 'signin'>('signup');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  const handleSignIn = async () => {
+  const validate = (): boolean => {
+    setError(null);
+    setInfoMessage(null);
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError('Please enter your email address.');
+      return false;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setError('Please enter a valid email address.');
+      return false;
+    }
+
+    if (mode === 'signup') {
+      const cleanUsername = username.trim();
+      if (!cleanUsername) {
+        setError('Please choose a username.');
+        return false;
+      }
+      const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
+      if (!usernameRegex.test(cleanUsername)) {
+        setError(
+          'Username must be between 3 and 20 characters and contain only letters, numbers, or underscores.'
+        );
+        return false;
+      }
+
+      if (!password || password.length < 8) {
+        setError('Password must be at least 8 characters long.');
+        return false;
+      }
+
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return false;
+      }
+    } else {
+      if (!password) {
+        setError('Please enter your password.');
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     if (!isConfigured) {
       setError('VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing. Please set your Supabase environment variables.');
       return;
     }
+
+    if (!validate()) return;
+
     setLoading(true);
     setError(null);
+    setInfoMessage(null);
+
     try {
-      await signInWithGoogle();
+      if (mode === 'signup') {
+        const result = await signUpWithEmail(email, password, username);
+        if (result.user && !result.session) {
+          setInfoMessage('Account created! Please check your email inbox to verify your account.');
+        }
+      } else {
+        await signInWithEmail(email, password);
+      }
     } catch (err: any) {
-      if (err?.code !== 'auth/popup-closed-by-user') {
-        setError(err?.message || 'Sign in with Google failed. Please check your credentials and try again.');
+      const msg = err?.message || 'Authentication failed. Please check your credentials and try again.';
+      if (msg.toLowerCase().includes('already registered')) {
+        setError('An account with this email already exists. Try signing in.');
+      } else if (msg.toLowerCase().includes('invalid login credentials')) {
+        setError('Incorrect email or password.');
+      } else {
+        setError(msg);
       }
     } finally {
       setLoading(false);
@@ -27,95 +102,197 @@ export const LoginScreen: React.FC = () => {
   return (
     <div className="w-full max-w-md mx-auto my-auto flex flex-col items-center text-center p-6 sm:p-8">
       {/* Brand Icon */}
-      <div className="w-20 h-20 rounded-3xl bg-primary-container text-on-primary flex items-center justify-center shadow-lg mb-6 ring-4 ring-primary-fixed/30 animate-in fade-in zoom-in duration-300">
-        <span className="material-symbols-outlined text-[42px]" style={{ fontVariationSettings: "'FILL' 1" }}>
+      <div className="w-16 h-16 rounded-3xl bg-primary-container text-on-primary flex items-center justify-center shadow-lg mb-4 ring-4 ring-primary-fixed/30 animate-in fade-in zoom-in duration-300">
+        <span className="material-symbols-outlined text-[36px]" style={{ fontVariationSettings: "'FILL' 1" }}>
           forest
         </span>
       </div>
 
       <h1 className="font-headline-md text-headline-md text-primary font-bold tracking-tight">
-        Welcome to WildDex
+        {mode === 'signup' ? 'Create an Account' : 'Welcome to WildDex'}
       </h1>
-      <p className="font-body-md text-body-md text-on-surface-variant mt-2 leading-relaxed max-w-sm">
-        Your pocket field naturalist. Identify wild species, maintain your personal collection, and discover local biodiversity.
+      <p className="font-body-md text-body-md text-on-surface-variant mt-1 leading-relaxed max-w-sm">
+        {mode === 'signup'
+          ? 'Sign up to catalog species and build your field collection.'
+          : 'Sign in to access your personal collection and records.'}
       </p>
 
-      {/* Configuration Error Alert if Supabase env vars are missing */}
+      {/* Mode Switcher */}
+      <div className="w-full max-w-xs mt-4 p-1 rounded-full bg-surface-container flex items-center">
+        <button
+          type="button"
+          onClick={() => {
+            setMode('signup');
+            setError(null);
+            setInfoMessage(null);
+          }}
+          className={`flex-1 py-1 rounded-full font-label-md text-xs font-bold transition-all ${
+            mode === 'signup'
+              ? 'bg-surface-container-lowest text-primary shadow-sm'
+              : 'text-on-surface-variant'
+          }`}
+        >
+          Sign Up
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setMode('signin');
+            setError(null);
+            setInfoMessage(null);
+          }}
+          className={`flex-1 py-1 rounded-full font-label-md text-xs font-bold transition-all ${
+            mode === 'signin'
+              ? 'bg-surface-container-lowest text-primary shadow-sm'
+              : 'text-on-surface-variant'
+          }`}
+        >
+          Sign In
+        </button>
+      </div>
+
       {!isConfigured && (
-        <div className="w-full mt-6 p-4 rounded-2xl bg-error-container text-on-error-container text-left flex items-start gap-3 border border-error/30 shadow-sm animate-in fade-in">
-          <span className="material-symbols-outlined text-[24px] text-error shrink-0 mt-0.5">error</span>
-          <div className="flex-1">
-            <h4 className="font-label-md font-bold text-error">Supabase Configuration Required</h4>
-            <p className="font-body-sm text-xs mt-1 text-on-error-container/90 leading-relaxed">
-              Missing <code className="px-1 py-0.5 rounded bg-black/10 font-mono text-[11px]">VITE_SUPABASE_URL</code> or{' '}
-              <code className="px-1 py-0.5 rounded bg-black/10 font-mono text-[11px]">VITE_SUPABASE_ANON_KEY</code>.
-              Please add these variables to your environment to enable real authentication and collection sync.
-            </p>
+        <div className="w-full mt-4 p-3 rounded-2xl bg-error-container text-on-error-container text-left flex items-start gap-2 border border-error/30 shadow-sm animate-in fade-in">
+          <span className="material-symbols-outlined text-[20px] text-error shrink-0 mt-0.5">error</span>
+          <div className="flex-1 text-xs">
+            <span className="font-bold block">Supabase Configuration Required</span>
+            <span className="opacity-90">Please configure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.</span>
           </div>
         </div>
       )}
 
-      {/* Runtime Sign-In Error */}
       {error && (
-        <div className="w-full mt-4 p-3 rounded-2xl bg-error-container text-on-error-container text-xs text-left flex items-center gap-2 border border-error/20">
+        <div className="w-full mt-3 p-3 rounded-2xl bg-error-container text-on-error-container text-xs text-left flex items-start gap-2 border border-error/20">
           <span className="material-symbols-outlined text-[18px] text-error shrink-0">error</span>
-          <span>{error}</span>
+          <span className="flex-1 leading-relaxed">{error}</span>
         </div>
       )}
 
-      {/* Google Sign In Call to Action */}
-      <div className="w-full mt-8 space-y-3">
+      {infoMessage && (
+        <div className="w-full mt-3 p-3 rounded-2xl bg-secondary-container text-on-secondary-container text-xs text-left flex items-start gap-2">
+          <span className="material-symbols-outlined text-[18px] text-secondary shrink-0">check_circle</span>
+          <span className="flex-1 leading-relaxed">{infoMessage}</span>
+        </div>
+      )}
+
+      {/* Form */}
+      <form onSubmit={handleSubmit} className="w-full mt-4 space-y-3 text-left">
+        {mode === 'signup' && (
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+              Username
+            </label>
+            <div className="relative flex items-center">
+              <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-outline pointer-events-none">
+                person
+              </span>
+              <input
+                type="text"
+                required
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="e.g. naturalist_maya"
+                className="w-full h-11 pl-10 pr-3 rounded-2xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+              />
+            </div>
+            <p className="text-[10px] text-on-surface-variant mt-1 pl-1">
+              3 to 20 characters (letters, numbers, underscores)
+            </p>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+            Email
+          </label>
+          <div className="relative flex items-center">
+            <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-outline pointer-events-none">
+              mail
+            </span>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="explorer@example.com"
+              className="w-full h-11 pl-10 pr-3 rounded-2xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+            Password
+          </label>
+          <div className="relative flex items-center">
+            <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-outline pointer-events-none">
+              lock
+            </span>
+            <input
+              type={showPassword ? 'text' : 'password'}
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="At least 8 characters"
+              className="w-full h-11 pl-10 pr-10 rounded-2xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="absolute right-3 w-7 h-7 rounded-full flex items-center justify-center text-outline hover:text-on-surface"
+            >
+              <span className="material-symbols-outlined text-[18px]">
+                {showPassword ? 'visibility_off' : 'visibility'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {mode === 'signup' && (
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+              Confirm Password
+            </label>
+            <div className="relative flex items-center">
+              <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-outline pointer-events-none">
+                lock_reset
+              </span>
+              <input
+                type={showConfirmPassword ? 'text' : 'password'}
+                required
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Re-enter password"
+                className="w-full h-11 pl-10 pr-10 rounded-2xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                className="absolute right-3 w-7 h-7 rounded-full flex items-center justify-center text-outline hover:text-on-surface"
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  {showConfirmPassword ? 'visibility_off' : 'visibility'}
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <button
-          onClick={handleSignIn}
+          type="submit"
           disabled={loading}
-          type="button"
-          className="w-full py-3.5 px-6 rounded-full bg-primary text-on-primary font-label-lg font-bold flex items-center justify-center gap-3 shadow-lg hover:opacity-95 active:scale-98 transition-all disabled:opacity-50"
+          className="w-full h-12 mt-3 rounded-full bg-primary text-on-primary font-label-lg font-bold text-sm flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
         >
           {loading ? (
-            <span className="material-symbols-outlined text-[22px] animate-spin">progress_activity</span>
+            <>
+              <span className="material-symbols-outlined text-[20px] animate-spin">progress_activity</span>
+              <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
+            </>
           ) : (
-            <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-              <path
-                fill="#ffffff"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="#acf4a4"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="#ffdbd1"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-              />
-              <path
-                fill="#ffffff"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-              />
-            </svg>
+            <span>{mode === 'signup' ? 'Create Account' : 'Sign In'}</span>
           )}
-          <span>{loading ? 'Connecting to Google...' : 'Sign in with Google'}</span>
         </button>
-
-        <p className="font-label-sm text-[11px] text-on-surface-variant">
-          Sign in securely to catalog species and sync your collection across devices.
-        </p>
-      </div>
-
-      {/* Feature Badges */}
-      <div className="grid grid-cols-3 gap-2 w-full mt-10 pt-6 border-t border-outline-variant/30 text-center">
-        <div className="p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1.5">
-          <span className="material-symbols-outlined text-[22px] text-primary">photo_camera</span>
-          <span className="font-label-sm text-[11px] font-semibold text-on-surface">AI Scanner</span>
-        </div>
-        <div className="p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1.5">
-          <span className="material-symbols-outlined text-[22px] text-secondary">collections_bookmark</span>
-          <span className="font-label-sm text-[11px] font-semibold text-on-surface">My Collection</span>
-        </div>
-        <div className="p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1.5">
-          <span className="material-symbols-outlined text-[22px] text-tertiary">emoji_events</span>
-          <span className="font-label-sm text-[11px] font-semibold text-on-surface">Achievements</span>
-        </div>
-      </div>
+      </form>
     </div>
   );
 };

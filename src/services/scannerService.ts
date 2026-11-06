@@ -17,9 +17,11 @@ export interface EnrichedSpecimenScanResult extends SpecimenScanResult {
 }
 
 /**
- * Compresses an image file or DataURL to maximum 1024px width/height before network transfer
+ * Compresses an image file or DataURL to maximum 1024px width/height and JPEG format before network transfer
  */
 export async function compressImage(dataUrl: string, maxDimension = 1024): Promise<string> {
+  if (!dataUrl) return dataUrl;
+
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
@@ -36,19 +38,94 @@ export async function compressImage(dataUrl: string, maxDimension = 1024): Promi
       }
 
       const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = Math.max(1, width);
+      canvas.height = Math.max(1, height);
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(img, 0, 0, width, height);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         resolve(canvas.toDataURL('image/jpeg', 0.85));
       } else {
         resolve(dataUrl);
       }
     };
-    img.onerror = () => resolve(dataUrl);
+    img.onerror = (e) => {
+      console.warn('Image compression load failed, proceeding with original data:', e);
+      resolve(dataUrl);
+    };
     img.src = dataUrl;
   });
+}
+
+/**
+ * Translates raw API/server error messages into simple everyday words
+ */
+export function formatScannerErrorMessage(errorMsg: string, status?: number): string {
+  const lower = (errorMsg || '').toLowerCase();
+
+  // 1. Quota or Rate Limit
+  if (
+    status === 429 ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('quota') ||
+    lower.includes('rate limit') ||
+    lower.includes('429') ||
+    lower.includes('too many requests')
+  ) {
+    return 'Too many scans right now, please wait a minute';
+  }
+
+  // 2. Invalid or Missing API key
+  if (
+    status === 401 ||
+    status === 403 ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('permission_denied') ||
+    lower.includes('invalid api key') ||
+    lower.includes('key is not configured') ||
+    lower.includes('api key not valid') ||
+    lower.includes('unauthenticated')
+  ) {
+    return 'Invalid or missing API key. Please check your Gemini API key in Settings > Secrets.';
+  }
+
+  // 3. Model Not Found or Unavailable
+  if (
+    status === 404 ||
+    lower.includes('not_found') ||
+    lower.includes('model not found') ||
+    lower.includes('is not found')
+  ) {
+    return 'The AI scanner model is not available. Please verify the model name or try again later.';
+  }
+
+  // 3b. High Demand / Temporary Service Unavailable
+  if (
+    status === 503 ||
+    lower.includes('high demand') ||
+    lower.includes('unavailable') ||
+    lower.includes('overloaded')
+  ) {
+    return 'The AI model is experiencing high demand right now. Please try again in a moment.';
+  }
+
+  // 4. Safety filter
+  if (lower.includes('safety') || lower.includes('blocked') || lower.includes('harm')) {
+    return 'Photo could not be processed due to safety filters. Please try a different photo.';
+  }
+
+  // 5. Network errors
+  if (lower.includes('network') || lower.includes('failed to fetch')) {
+    return 'Network connection issue. Please check your internet connection and retry.';
+  }
+
+  // 6. Generic server error
+  if (lower.includes('500') || lower.includes('internal server error')) {
+    return 'The scan server encountered an issue. Please try again in a moment.';
+  }
+
+  return errorMsg || 'Unable to identify specimen. Please try again.';
 }
 
 /**
@@ -253,55 +330,14 @@ export async function enrichScanResult(
 }
 
 /**
- * Send specimen image to Gemini Scanner API with automatic 1-retry on network error and enrichment
+ * Send specimen image to Gemini Scanner API with single request execution (no automatic retry)
  */
 export async function scanSpecimenImage(
   imageDataUrl: string,
-  testCaseId?: string,
-  retryCount = 1
+  testCaseId?: string
 ): Promise<EnrichedSpecimenScanResult> {
-  // Compress to max 1024px width/height
+  // Compress to max 1024px width/height and format as JPEG
   const compressedDataUrl = await compressImage(imageDataUrl, 1024);
-
-  let lastError: any = null;
-
-  for (let attempt = 0; attempt <= retryCount; attempt++) {
-    try {
-      if (attempt > 0) {
-        // Exponential backoff wait before retry
-        await new Promise((res) => setTimeout(res, 800 * attempt));
-      }
-
-      const response = await fetch('/api/scan', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageBase64: compressedDataUrl,
-          mimeType: 'image/jpeg',
-          testCaseId,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Server returned HTTP status ${response.status}: ${response.statusText}`);
-      }
-
-      const payload = await response.json();
-      if (payload.success && payload.data) {
-        const rawResult = payload.data as SpecimenScanResult;
-        // Enrich with real iNaturalist & Wikipedia photos
-        const enriched = await enrichScanResult(rawResult, compressedDataUrl);
-        return enriched;
-      }
-
-      throw new Error(payload.error || 'Gemini model did not return a valid identification schema.');
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`Specimen scan attempt ${attempt + 1} failed:`, err.message || err);
-    }
-  }
 
   // If running predefined test case offline
   if (testCaseId) {
@@ -311,16 +347,73 @@ export async function scanSpecimenImage(
     }
   }
 
-  // If local development fallback is needed
-  if (lastError && (lastError.message?.includes('Failed to fetch') || lastError.message?.includes('NetworkError'))) {
-    console.info('Switching to local fallback test case due to network disconnect.');
-    return await enrichScanResult(SCANNER_TEST_CASES[0].expectedOutput, compressedDataUrl);
-  }
+  // Exactly one request sent per scan - no automatic retry on rate limits or errors
+  try {
+    const response = await fetch('/api/scan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        imageBase64: compressedDataUrl,
+        mimeType: 'image/jpeg',
+        testCaseId,
+      }),
+    });
 
-  throw new Error(
-    lastError?.message ||
-      'Unable to identify specimen. Please ensure good lighting and steady framing, then try again.'
-  );
+    const responseText = await response.text();
+    let payload: any = null;
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      console.warn('Response from /api/scan was not JSON:', responseText.slice(0, 200));
+    }
+
+    const isHtmlResponse =
+      !payload &&
+      (responseText.includes('<!doctype') ||
+        responseText.includes('<html') ||
+        responseText.includes('Starting Server') ||
+        responseText.includes('warmup'));
+
+    if (!response.ok || !payload || !payload.success) {
+      const rawServerMessage =
+        payload?.error ||
+        payload?.message ||
+        (isHtmlResponse
+          ? 'The AI scanner is temporarily busy or starting up. Please try again in a moment.'
+          : `Server returned status ${response.status}: ${response.statusText}`);
+
+      // Log the full error to the console
+      console.error('Gemini Scanner Server Error:', {
+        status: response.status,
+        statusText: response.statusText,
+        payload,
+        rawMessage: rawServerMessage,
+        isHtmlResponse,
+      });
+
+      const friendlyMessage = formatScannerErrorMessage(rawServerMessage, response.status);
+      const errorObj = new Error(friendlyMessage);
+      (errorObj as any).status = response.status;
+      (errorObj as any).rawServerMessage = rawServerMessage;
+
+      throw errorObj;
+    }
+
+    if (payload && payload.success && payload.data) {
+      const rawResult = payload.data as SpecimenScanResult;
+      // Enrich with real iNaturalist & Wikipedia photos
+      const enriched = await enrichScanResult(rawResult, compressedDataUrl);
+      return enriched;
+    }
+
+    const errMessage = payload?.error || 'Unable to identify specimen. Please try another photo.';
+    throw new Error(formatScannerErrorMessage(errMessage));
+  } catch (err: any) {
+    console.error('Specimen scan failed:', err);
+    throw err;
+  }
 }
 
 /**

@@ -233,7 +233,7 @@ export const SettingsPage: React.FC = () => {
                 </div>
                 <p className="font-body-sm text-body-sm text-on-surface-variant truncate">{email}</p>
                 <p className="font-label-sm text-[11px] text-primary font-medium mt-0.5">
-                  {currentUser ? 'Google Account Connected' : 'Guest Mode'}
+                  {currentUser ? 'WildDex Account Active' : 'Guest Mode'}
                 </p>
               </div>
               {!currentUser && (

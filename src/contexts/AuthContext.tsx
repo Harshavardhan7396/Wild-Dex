@@ -35,7 +35,12 @@ interface AuthContextType {
   continueAsGuest: () => void;
   authModalOpen: boolean;
   setAuthModalOpen: (open: boolean) => void;
-  signInWithGoogle: () => Promise<AuthUser | null>;
+  signUpWithEmail: (
+    email: string,
+    password: string,
+    username: string
+  ) => Promise<{ user: AuthUser | null; session: any }>;
+  signInWithEmail: (email: string, password: string) => Promise<AuthUser | null>;
   logout: () => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => Promise<void>;
   isConfigured: boolean;
@@ -69,7 +74,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       id: sbUser.id,
       uid: sbUser.id,
       email: sbUser.email || '',
-      displayName: meta.full_name || meta.name || sbUser.email?.split('@')[0] || 'Nature Explorer',
+      displayName:
+        meta.username ||
+        meta.display_name ||
+        meta.full_name ||
+        meta.name ||
+        sbUser.email?.split('@')[0] ||
+        'Nature Explorer',
       photoURL: meta.avatar_url || meta.picture || '',
     };
   };
@@ -204,7 +215,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  const signInWithGoogle = async (): Promise<AuthUser | null> => {
+  const signUpWithEmail = async (
+    email: string,
+    password: string,
+    username: string
+  ): Promise<{ user: AuthUser | null; session: any }> => {
     if (!isSupabaseConfigured) {
       const err = new Error(
         'Supabase configuration missing: VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing. Please set these environment variables.'
@@ -214,24 +229,105 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
+      const cleanUsername = username.trim();
+      const cleanEmail = email.trim();
+
+      const { data, error } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
         options: {
-          redirectTo: window.location.origin,
-          queryParams: {
-            prompt: 'select_account',
+          data: {
+            username: cleanUsername,
+            display_name: cleanUsername,
+            full_name: cleanUsername,
           },
         },
       });
 
       if (error) {
-        console.error('Google sign-in error:', error);
+        console.error('Sign-up error from Supabase:', error);
         throw error;
       }
-      setAuthModalOpen(false);
+
+      // After sign-up, save the username in the profiles table
+      if (data.user) {
+        try {
+          const { error: profileError } = await supabase
+            .from('profiles')
+            .upsert([
+              {
+                id: data.user.id,
+                display_name: cleanUsername,
+                bio: 'Exploring biodiversity with WildDex.',
+                is_public: true,
+              },
+            ]);
+
+          if (profileError) {
+            console.warn('[Supabase Profile Upsert Warning]:', profileError);
+          }
+        } catch (profileErr) {
+          console.warn('[Supabase Profile Upsert Exception]:', profileErr);
+        }
+
+        const authUser = mapSupabaseUser(data.user);
+        if (data.session) {
+          setCurrentUser(authUser);
+          await fetchUserProfile(authUser);
+          setIsGuest(false);
+          try {
+            sessionStorage.removeItem('wilddex_guest_session');
+          } catch {}
+          setAuthModalOpen(false);
+        }
+        return { user: authUser, session: data.session };
+      }
+
+      return { user: null, session: null };
+    } catch (err: any) {
+      console.error('Sign-up error:', err);
+      throw err;
+    }
+  };
+
+  const signInWithEmail = async (
+    email: string,
+    password: string
+  ): Promise<AuthUser | null> => {
+    if (!isSupabaseConfigured) {
+      const err = new Error(
+        'Supabase configuration missing: VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing. Please set these environment variables.'
+      );
+      console.error(err);
+      throw err;
+    }
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        console.error('Sign-in error from Supabase:', error);
+        throw error;
+      }
+
+      if (data.user) {
+        const authUser = mapSupabaseUser(data.user);
+        setCurrentUser(authUser);
+        await fetchUserProfile(authUser);
+        setIsGuest(false);
+        try {
+          sessionStorage.removeItem('wilddex_guest_session');
+        } catch {}
+        setAuthModalOpen(false);
+        return authUser;
+      }
+
       return null;
     } catch (err: any) {
-      console.error('Google sign-in error:', err);
+      console.error('Sign-in error:', err);
       throw err;
     }
   };
@@ -289,7 +385,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         continueAsGuest,
         authModalOpen,
         setAuthModalOpen,
-        signInWithGoogle,
+        signUpWithEmail,
+        signInWithEmail,
         logout,
         updateUserProfile,
         isConfigured: isSupabaseConfigured,

@@ -10,6 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Automatically populated when users sign up via auth trigger
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+  username TEXT,
   display_name TEXT,
   avatar_url TEXT,
   bio TEXT,
@@ -17,7 +18,9 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
--- Index for profiles
+-- Unique case-insensitive index for usernames
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles(LOWER(username));
+CREATE INDEX IF NOT EXISTS idx_profiles_username ON public.profiles(username);
 CREATE INDEX IF NOT EXISTS idx_profiles_created_at ON public.profiles(created_at);
 
 -- 3. ALBUMS TABLE
@@ -205,18 +208,28 @@ CREATE POLICY "Users can follow/unfollow"
 -- ==============================================================================
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_username TEXT;
+  v_display_name TEXT;
 BEGIN
-  INSERT INTO public.profiles (id, display_name, avatar_url, bio, is_public)
+  -- Extract username from user metadata, defaulting to email prefix if not supplied
+  v_username := LOWER(TRIM(COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1))));
+  v_display_name := COALESCE(NEW.raw_user_meta_data->>'display_name', NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1));
+
+  INSERT INTO public.profiles (id, username, display_name, avatar_url, bio, is_public)
   VALUES (
     NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1)),
+    v_username,
+    v_display_name,
     COALESCE(NEW.raw_user_meta_data->>'avatar_url', NEW.raw_user_meta_data->>'picture', ''),
     'Nature enthusiast & biodiversity explorer',
     true
   )
   ON CONFLICT (id) DO UPDATE SET
-    display_name = EXCLUDED.display_name,
-    avatar_url = EXCLUDED.avatar_url;
+    username = COALESCE(EXCLUDED.username, public.profiles.username),
+    display_name = COALESCE(EXCLUDED.display_name, public.profiles.display_name),
+    avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url);
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -225,6 +238,63 @@ DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 CREATE TRIGGER on_auth_user_created
   AFTER INSERT ON auth.users
   FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- ==============================================================================
+-- 8. SECURITY DEFINER RPC FUNCTIONS FOR USERNAME LOOKUP & AVAILABILITY
+-- ==============================================================================
+
+-- Lookup matching email by username without exposing the profiles table
+CREATE OR REPLACE FUNCTION public.get_email_by_username(p_username TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_email TEXT;
+BEGIN
+  IF p_username IS NULL OR TRIM(p_username) = '' THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT u.email INTO v_email
+  FROM auth.users u
+  JOIN public.profiles p ON p.id = u.id
+  WHERE LOWER(p.username) = LOWER(TRIM(p_username))
+  LIMIT 1;
+
+  RETURN v_email;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_email_by_username(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_email_by_username(TEXT) TO anon, authenticated, service_role;
+
+-- Fast username availability check for real-time validation
+CREATE OR REPLACE FUNCTION public.check_username_available(p_username TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF p_username IS NULL OR LENGTH(TRIM(p_username)) < 3 OR LENGTH(TRIM(p_username)) > 20 THEN
+    RETURN FALSE;
+  END IF;
+
+  -- Verify format: 3-20 characters, alphanumeric and underscore only
+  IF TRIM(p_username) !~ '^[a-zA-Z0-9_]{3,20}$' THEN
+    RETURN FALSE;
+  END IF;
+
+  RETURN NOT EXISTS (
+    SELECT 1 FROM public.profiles WHERE LOWER(username) = LOWER(TRIM(p_username))
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.check_username_available(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.check_username_available(TEXT) TO anon, authenticated, service_role;
 
 -- ==============================================================================
 -- 8. STORAGE BUCKET & STORAGE RLS POLICIES

@@ -39,10 +39,10 @@ export const SpeciesRangeMap: React.FC<SpeciesRangeMapProps> = ({
         scrollWheelZoom: false,
       });
 
-      // CartoDB Positron / Voyager or OpenStreetMap free tiles (no API key required)
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      // Free OpenStreetMap tiles (no API key required)
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
-        subdomains: 'abcd',
+        attribution: '© OpenStreetMap contributors',
       }).addTo(map);
 
       // Add custom minimal zoom control in top-right

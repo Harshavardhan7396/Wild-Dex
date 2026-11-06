@@ -1,10 +1,10 @@
 /**
  * WildDex AI Specimen Scanner Configuration & Prompt Architecture
  * 
- * Model: Single constant defined as requested: gemini-3.8-flash
+ * Model: Single constant defined as requested: gemini-3.1-flash-lite (highest RPM on free tier: 15 RPM)
  */
 
-export const GEMINI_SCANNER_MODEL = 'gemini-3.8-flash';
+export const GEMINI_SCANNER_MODEL = 'gemini-3.1-flash-lite';
 
 /**
  * System Instruction for Gemini Vision Model

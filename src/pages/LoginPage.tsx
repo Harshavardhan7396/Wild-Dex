@@ -3,21 +3,102 @@ import { useAuth } from '../contexts/AuthContext';
 import { WildDexLogo } from '../components/common/WildDexLogo';
 
 export const LoginPage: React.FC = () => {
-  const { signInWithGoogle, continueAsGuest } = useAuth();
+  const { signUpWithEmail, signInWithEmail, continueAsGuest } = useAuth();
+
+  // Mode: 'signup' (default) or 'signin'
+  const [mode, setMode] = useState<'signup' | 'signin'>('signup');
+
+  // Form fields
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  // Password visibility
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  // Status
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  const handleGoogleSignIn = async () => {
+  const validateForm = (): boolean => {
+    setError(null);
+    setInfoMessage(null);
+
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError('Please enter your email address.');
+      return false;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(trimmedEmail)) {
+      setError('Please enter a valid email address.');
+      return false;
+    }
+
+    if (mode === 'signup') {
+      const trimmedUsername = username.trim();
+      if (!trimmedUsername) {
+        setError('Please choose a username.');
+        return false;
+      }
+      // 3 to 20 characters, letters, numbers, underscores
+      const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
+      if (!usernameRegex.test(trimmedUsername)) {
+        setError(
+          'Username must be between 3 and 20 characters and contain only letters, numbers, or underscores.'
+        );
+        return false;
+      }
+
+      if (!password || password.length < 8) {
+        setError('Password must be at least 8 characters long.');
+        return false;
+      }
+
+      if (password !== confirmPassword) {
+        setError('Passwords do not match. Please re-enter your confirm password.');
+        return false;
+      }
+    } else {
+      if (!password) {
+        setError('Please enter your password.');
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validateForm()) return;
+
     setLoading(true);
     setError(null);
+    setInfoMessage(null);
+
     try {
-      await signInWithGoogle();
+      if (mode === 'signup') {
+        const result = await signUpWithEmail(email, password, username);
+        if (result.user && !result.session) {
+          setInfoMessage(
+            'Account created successfully! Please check your email inbox to confirm your registration.'
+          );
+        }
+      } else {
+        await signInWithEmail(email, password);
+      }
     } catch (err: any) {
-      if (err?.code !== 'auth/popup-closed-by-user') {
-        setError(
-          err?.message ||
-            'Could not sign in with Google. Please check your network connection and retry.'
-        );
+      const msg = err?.message || 'Authentication failed. Please check your credentials and try again.';
+      if (msg.toLowerCase().includes('already registered')) {
+        setError('An account with this email already exists. Try signing in instead.');
+      } else if (msg.toLowerCase().includes('invalid login credentials')) {
+        setError('Incorrect email or password. Please double check and retry.');
+      } else {
+        setError(msg);
       }
     } finally {
       setLoading(false);
@@ -27,14 +108,13 @@ export const LoginPage: React.FC = () => {
   const collageImg =
     'https://lh3.googleusercontent.com/aida-public/AB6AXuC4hwOdR9hp5RHvj9IfjLwfa9xIxn2vjXW4hQZ9ZuP1PsyRffqhOrTrl4-JUSXrMQ1DspDaB1LcoZf3s2DWtol-04Jqmk86MWX_dGClszqQzoz9uFY4uuUoHjf0aglX2sok0f0xvmjFZuGJjBhyqaXyngGrNg59R-5tywDbOfWuMwnWE96ID9oueMxiMP1acV1qtRw5DrWaBHx4oI3ORnP-7FPTfMeGrF_BpnMXJmSl8TymzrfrPldAHg';
 
-  // Replaceable Google Sites links requested by user
   const termsUrl = 'https://sites.google.com/view/wilddex-terms';
   const privacyUrl = 'https://sites.google.com/view/wilddex-privacy';
 
   return (
-    <div className="min-h-screen w-full bg-[#FAF7F0] font-sans antialiased text-[#1b2a22] flex items-center justify-center p-4 sm:p-6 md:p-10 lg:p-12">
-      {/* Container: Responsive Single-Column on Mobile, Two-Column on Desktop (from Stitch Design) */}
-      <main className="w-full max-w-5xl bg-[#FDFBF7] rounded-[32px] sm:rounded-[36px] shadow-2xl border border-[#DFD5C2]/60 overflow-hidden grid grid-cols-1 lg:grid-cols-12 min-h-[620px]">
+    <div className="min-h-screen w-full bg-[#FAF7F0] font-sans antialiased text-[#1b2a22] flex items-center justify-center p-4 sm:p-6 md:p-8 lg:p-12">
+      {/* Container: Responsive Single-Column on Mobile, Two-Column on Desktop (Stitch Design) */}
+      <main className="w-full max-w-5xl bg-[#FDFBF7] rounded-[32px] sm:rounded-[36px] shadow-2xl border border-[#DFD5C2]/60 overflow-hidden grid grid-cols-1 lg:grid-cols-12 min-h-[640px]">
         {/* DESKTOP-ONLY LEFT COLUMN (Wildlife Collage Atmosphere: 7 cols) */}
         <div className="relative hidden lg:flex lg:col-span-7 bg-[#081c15] overflow-hidden flex-col justify-between p-10 xl:p-12">
           {/* Background Collage Imagery */}
@@ -62,7 +142,7 @@ export const LoginPage: React.FC = () => {
           </div>
 
           {/* Bottom Overlay Quote & Statistics */}
-          <div className="relative z-10 max-w-md pt-32">
+          <div className="relative z-10 max-w-md pt-24">
             <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[#74c69d] mb-2">
               <span>Biodiversity Archive</span>
               <span>•</span>
@@ -79,7 +159,7 @@ export const LoginPage: React.FC = () => {
         </div>
 
         {/* RIGHT COLUMN (Mobile Centered + Desktop Auth Card: 5 cols) */}
-        <div className="lg:col-span-5 bg-[#FAF7F0] flex flex-col justify-between p-6 sm:p-10 md:p-12">
+        <div className="lg:col-span-5 bg-[#FAF7F0] flex flex-col justify-between p-6 sm:p-8 md:p-10 overflow-y-auto">
           {/* Top Brand Header: Small Logo + Wordmark */}
           <div className="flex items-center justify-center lg:justify-start gap-2.5 pt-1">
             <div className="w-9 h-9 rounded-full overflow-hidden bg-[#1b4332] flex items-center justify-center shadow-sm ring-1 ring-[#40916c]/20 p-0.5">
@@ -91,89 +171,257 @@ export const LoginPage: React.FC = () => {
           </div>
 
           {/* Mobile-Only Wildlife Image Card (Shown below lg) */}
-          <div className="lg:hidden my-4 flex flex-col items-center">
-            <div className="relative w-full max-w-[340px] aspect-[4/3] rounded-3xl overflow-hidden shadow-lg border border-[#DFD5C2]/80 bg-[#F4EFE6]">
+          <div className="lg:hidden my-3 flex flex-col items-center">
+            <div className="relative w-full max-w-[340px] aspect-[16/9] rounded-2xl overflow-hidden shadow-md border border-[#DFD5C2]/80 bg-[#F4EFE6]">
               <img
                 src={collageImg}
-                alt="Wildlife discovery collage with tiger, butterfly, and scarlet macaw"
-                className="w-full h-full object-cover transition-transform duration-700 hover:scale-105"
+                alt="Wildlife discovery collage"
+                className="w-full h-full object-cover"
               />
-              <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#081c15]/50 via-transparent to-transparent pointer-events-none" />
-              <div className="absolute bottom-3 left-3 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#081c15]/75 backdrop-blur-md border border-white/20 text-white text-[11px] font-medium">
+              <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[#081c15]/60 to-transparent pointer-events-none" />
+              <div className="absolute bottom-2 left-2 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#081c15]/75 backdrop-blur-md text-white text-[10px] font-medium">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#52b788] animate-pulse" />
                 <span>1.2M+ Species Cataloged</span>
               </div>
             </div>
           </div>
 
-          {/* Headings & Form Actions */}
-          <div className="my-auto py-2 sm:py-6 flex flex-col items-center lg:items-start text-center lg:text-left">
-            <h1 className="font-extrabold text-2xl sm:text-3xl text-[#081c15] tracking-tight">
-              Welcome to WildDex
+          {/* Headings & Form */}
+          <div className="my-auto py-2 flex flex-col items-center lg:items-start text-center lg:text-left w-full">
+            <h1 className="font-extrabold text-2xl sm:text-[26px] text-[#081c15] tracking-tight">
+              {mode === 'signup' ? 'Create an Account' : 'Welcome to WildDex'}
             </h1>
-            <p className="text-sm font-medium text-stone-600 mt-1.5 leading-relaxed max-w-sm">
-              Identify wild species and build your collection.
+            <p className="text-xs sm:text-sm font-medium text-stone-600 mt-1 leading-relaxed max-w-sm">
+              {mode === 'signup'
+                ? 'Sign up to catalog species and build your field collection.'
+                : 'Sign in to access your personal collection and records.'}
             </p>
 
-            {/* Error Notification with Retry */}
+            {/* Mode Switcher Tabs */}
+            <div className="w-full max-w-[340px] mt-4 p-1 rounded-full bg-[#EAE2D4]/70 flex items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('signup');
+                  setError(null);
+                  setInfoMessage(null);
+                }}
+                className={`flex-1 py-1.5 rounded-full font-label-md text-xs font-bold transition-all ${
+                  mode === 'signup'
+                    ? 'bg-white text-[#1b4332] shadow-sm'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                Sign Up
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('signin');
+                  setError(null);
+                  setInfoMessage(null);
+                }}
+                className={`flex-1 py-1.5 rounded-full font-label-md text-xs font-bold transition-all ${
+                  mode === 'signin'
+                    ? 'bg-white text-[#1b4332] shadow-sm'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                Sign In
+              </button>
+            </div>
+
+            {/* Error Notification */}
             {error && (
-              <div className="w-full max-w-[340px] mt-4 p-3 rounded-2xl bg-[#ffdad6] text-[#93000a] text-xs text-left flex flex-col gap-2 border border-[#ba1a1a]/20 animate-in fade-in">
-                <div className="flex items-start gap-2">
-                  <span className="material-symbols-outlined text-[18px] text-[#ba1a1a] shrink-0 mt-0.5">
-                    error
-                  </span>
-                  <span className="flex-1">{error}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleGoogleSignIn}
-                  className="self-end px-3 py-1 rounded-full bg-[#ba1a1a] text-white font-bold text-[11px] hover:opacity-90 active:scale-95 transition-all"
-                >
-                  Retry Sign-In
-                </button>
+              <div className="w-full max-w-[340px] mt-3.5 p-3 rounded-2xl bg-[#ffdad6] text-[#93000a] text-xs text-left flex items-start gap-2 border border-[#ba1a1a]/20 animate-in fade-in">
+                <span className="material-symbols-outlined text-[18px] text-[#ba1a1a] shrink-0 mt-0.5">
+                  error
+                </span>
+                <span className="flex-1 leading-relaxed">{error}</span>
               </div>
             )}
 
-            {/* Action Buttons */}
-            <div className="w-full max-w-[340px] mt-6 space-y-3.5">
-              {/* Large Rounded Button: "Continue with Google" */}
+            {/* Info / Confirmation Notification */}
+            {infoMessage && (
+              <div className="w-full max-w-[340px] mt-3.5 p-3 rounded-2xl bg-[#d8f3dc] text-[#1b4332] text-xs text-left flex items-start gap-2 border border-[#52b788]/30 animate-in fade-in">
+                <span className="material-symbols-outlined text-[18px] text-[#1b4332] shrink-0 mt-0.5">
+                  check_circle
+                </span>
+                <span className="flex-1 leading-relaxed">{infoMessage}</span>
+              </div>
+            )}
+
+            {/* Email & Password Form */}
+            <form onSubmit={handleSubmit} className="w-full max-w-[340px] mt-4 space-y-3">
+              {/* Username Field (Sign-up only) */}
+              {mode === 'signup' && (
+                <div className="text-left">
+                  <label className="block text-[11px] font-bold text-stone-700 uppercase tracking-wider mb-1">
+                    Username
+                  </label>
+                  <div className="relative flex items-center">
+                    <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-stone-400 pointer-events-none">
+                      person
+                    </span>
+                    <input
+                      type="text"
+                      required
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="e.g. naturalist_maya"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      className="w-full h-11 pl-10 pr-3 rounded-2xl bg-white border border-[#DFD5C2] text-stone-900 placeholder:text-stone-400 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#1b4332]/40 focus:border-[#1b4332] shadow-xs transition-all"
+                    />
+                  </div>
+                  <p className="text-[10px] text-stone-500 mt-1 pl-1">
+                    3 to 20 characters (letters, numbers, underscores)
+                  </p>
+                </div>
+              )}
+
+              {/* Email Field */}
+              <div className="text-left">
+                <label className="block text-[11px] font-bold text-stone-700 uppercase tracking-wider mb-1">
+                  Email
+                </label>
+                <div className="relative flex items-center">
+                  <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-stone-400 pointer-events-none">
+                    mail
+                  </span>
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="explorer@example.com"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    className="w-full h-11 pl-10 pr-3 rounded-2xl bg-white border border-[#DFD5C2] text-stone-900 placeholder:text-stone-400 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#1b4332]/40 focus:border-[#1b4332] shadow-xs transition-all"
+                  />
+                </div>
+              </div>
+
+              {/* Password Field with Show/Hide Eye Icon */}
+              <div className="text-left">
+                <label className="block text-[11px] font-bold text-stone-700 uppercase tracking-wider mb-1">
+                  Password
+                </label>
+                <div className="relative flex items-center">
+                  <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-stone-400 pointer-events-none">
+                    lock
+                  </span>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="At least 8 characters"
+                    className="w-full h-11 pl-10 pr-10 rounded-2xl bg-white border border-[#DFD5C2] text-stone-900 placeholder:text-stone-400 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#1b4332]/40 focus:border-[#1b4332] shadow-xs transition-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    className="absolute right-2.5 w-7 h-7 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-700 transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">
+                      {showPassword ? 'visibility_off' : 'visibility'}
+                    </span>
+                  </button>
+                </div>
+                {mode === 'signup' && (
+                  <p className="text-[10px] text-stone-500 mt-1 pl-1">At least 8 characters</p>
+                )}
+              </div>
+
+              {/* Confirm Password Field (Sign-up only) */}
+              {mode === 'signup' && (
+                <div className="text-left">
+                  <label className="block text-[11px] font-bold text-stone-700 uppercase tracking-wider mb-1">
+                    Confirm Password
+                  </label>
+                  <div className="relative flex items-center">
+                    <span className="material-symbols-outlined absolute left-3.5 text-[18px] text-stone-400 pointer-events-none">
+                      lock_reset
+                    </span>
+                    <input
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter password"
+                      className="w-full h-11 pl-10 pr-10 rounded-2xl bg-white border border-[#DFD5C2] text-stone-900 placeholder:text-stone-400 text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#1b4332]/40 focus:border-[#1b4332] shadow-xs transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                      className="absolute right-2.5 w-7 h-7 rounded-full flex items-center justify-center text-stone-400 hover:text-stone-700 transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">
+                        {showConfirmPassword ? 'visibility_off' : 'visibility'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Submit Button with Loading State */}
               <button
-                type="button"
-                onClick={handleGoogleSignIn}
+                type="submit"
                 disabled={loading}
-                className="w-full h-12 bg-white hover:bg-stone-50 active:scale-[0.98] transition-all rounded-full border border-stone-300 shadow-sm flex items-center justify-center gap-3 px-5 group cursor-pointer disabled:opacity-60"
+                className="w-full h-12 mt-2 bg-[#1b4332] hover:bg-[#2d6a4f] text-white active:scale-[0.98] transition-all rounded-full shadow-md font-label-lg font-bold text-sm flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
               >
                 {loading ? (
-                  <span className="material-symbols-outlined text-[20px] text-stone-700 animate-spin">
-                    progress_activity
-                  </span>
+                  <>
+                    <span className="material-symbols-outlined text-[18px] animate-spin">
+                      progress_activity
+                    </span>
+                    <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
+                  </>
                 ) : (
-                  <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                    <path
-                      fill="#4285F4"
-                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                    />
-                    <path
-                      fill="#34A853"
-                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                    />
-                    <path
-                      fill="#FBBC05"
-                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                    />
-                    <path
-                      fill="#EA4335"
-                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                    />
-                  </svg>
+                  <span>{mode === 'signup' ? 'Create Account' : 'Sign In'}</span>
                 )}
-                <span className="text-sm font-semibold text-stone-800 tracking-wide group-hover:text-stone-950">
-                  {loading ? 'Connecting with Google...' : 'Continue with Google'}
-                </span>
               </button>
 
+              {/* Mode Toggle Switcher Text */}
+              <div className="pt-1 text-center">
+                {mode === 'signup' ? (
+                  <p className="text-xs text-stone-600">
+                    Already have an account?{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('signin');
+                        setError(null);
+                        setInfoMessage(null);
+                      }}
+                      className="font-bold text-[#1b4332] hover:underline cursor-pointer"
+                    >
+                      Sign In
+                    </button>
+                  </p>
+                ) : (
+                  <p className="text-xs text-stone-600">
+                    Don't have an account?{' '}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('signup');
+                        setError(null);
+                        setInfoMessage(null);
+                      }}
+                      className="font-bold text-[#1b4332] hover:underline cursor-pointer"
+                    >
+                      Sign Up
+                    </button>
+                  </p>
+                )}
+              </div>
+
               {/* Divider with "or" */}
-              <div className="relative flex items-center justify-center my-1">
+              <div className="relative flex items-center justify-center pt-1">
                 <div className="border-t border-stone-300 w-full" />
                 <span className="bg-[#FAF7F0] px-3 text-xs font-medium text-stone-500 uppercase tracking-widest">
                   or
@@ -185,26 +433,26 @@ export const LoginPage: React.FC = () => {
               <button
                 type="button"
                 onClick={continueAsGuest}
-                className="w-full py-2.5 text-center text-sm font-semibold text-[#2d6a4f] hover:text-[#081c15] active:scale-95 transition-all cursor-pointer"
+                className="w-full py-2 text-center text-xs font-semibold text-[#2d6a4f] hover:text-[#081c15] active:scale-95 transition-all cursor-pointer"
               >
                 Continue as guest
               </button>
-            </div>
+            </form>
 
             {/* Desktop Quick Info Pill from Stitch template */}
-            <div className="hidden lg:flex w-full max-w-[340px] mt-6 p-3 rounded-2xl bg-[#F4EFE6]/70 border border-[#DFD5C2] items-center gap-3 text-left">
+            <div className="hidden lg:flex w-full max-w-[340px] mt-5 p-3 rounded-2xl bg-[#F4EFE6]/70 border border-[#DFD5C2] items-center gap-3 text-left">
               <div className="w-8 h-8 rounded-xl bg-[#2d6a4f] text-white flex items-center justify-center shrink-0 text-sm">
                 🌿
               </div>
               <div className="text-xs">
                 <p className="font-semibold text-[#081c15]">Offline Species Identification</p>
-                <p className="text-stone-500">Local AI model runs even deep in backcountry trails.</p>
+                <p className="text-stone-500 text-[11px]">Local AI model runs even deep in backcountry trails.</p>
               </div>
             </div>
           </div>
 
           {/* Bottom Legal / Terms and Privacy */}
-          <footer className="pt-4 border-t border-[#DFD5C2]/50 text-center lg:text-left">
+          <footer className="pt-3 border-t border-[#DFD5C2]/50 text-center lg:text-left">
             <p className="text-[11px] leading-relaxed text-stone-500 max-w-[320px] mx-auto lg:mx-0">
               By continuing you agree to our{' '}
               <a

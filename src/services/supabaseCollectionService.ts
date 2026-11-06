@@ -97,12 +97,95 @@ export async function compressImageToMax1024(dataUrl: string): Promise<string> {
 }
 
 /**
+ * Compresses an image source (dataUrl or HTTP URL) to a max 1024px JPEG Blob
+ */
+export async function compressImageToJpegBlob(sourceUrl: string, maxDimension = 1024): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    if (!sourceUrl) {
+      reject(new Error('No image provided to compress.'));
+      return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
+      try {
+        let { width, height } = img;
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round((height * maxDimension) / width);
+            width = maxDimension;
+          } else {
+            width = Math.round((width * maxDimension) / height);
+            height = maxDimension;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, width);
+        canvas.height = Math.max(1, height);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Failed to create canvas 2D context for image compression.'));
+          return;
+        }
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve(blob);
+            } else {
+              reject(new Error('Failed to convert canvas to JPEG blob.'));
+            }
+          },
+          'image/jpeg',
+          0.85
+        );
+      } catch (err) {
+        reject(err);
+      }
+    };
+
+    img.onerror = () => {
+      // Fallback: If remote URL blocked by CORS, try direct fetch as Blob
+      if (sourceUrl.startsWith('http')) {
+        fetch(sourceUrl)
+          .then((res) => {
+            if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+            return res.blob();
+          })
+          .then((blob) => resolve(blob))
+          .catch((fetchErr) => {
+            console.error('Fetch image fallback failed:', fetchErr);
+            reject(new Error('Could not load specimen image for compression.'));
+          });
+      } else if (sourceUrl.startsWith('data:')) {
+        try {
+          resolve(dataURLtoBlob(sourceUrl));
+        } catch (base64Err) {
+          reject(new Error('Invalid image base64 data format.'));
+        }
+      } else {
+        reject(new Error('Unable to read specimen image file.'));
+      }
+    };
+
+    img.src = sourceUrl;
+  });
+}
+
+/**
  * Helper to convert dataURL (base64) to Blob for upload
  */
 function dataURLtoBlob(dataurl: string): Blob {
   const arr = dataurl.split(',');
   const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
-  const bstr = atob(arr[1]);
+  const bstr = atob(arr[1] || arr[0]);
   let n = bstr.length;
   const u8arr = new Uint8Array(n);
   while (n--) {
@@ -157,18 +240,20 @@ export async function addSpecimenToSupabase(params: {
     throw configErr;
   }
 
-  // Derive active session user ID to guarantee matching auth.uid() in Supabase RLS
+  // 1. Authenticate with Supabase directly
   let authUserId = userId;
   try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user?.id) {
-      authUserId = session.user.id;
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      throw new Error('Please sign in to save');
     }
-  } catch (authErr) {
-    console.warn('[Supabase Auth Warning] Error getting session in addSpecimenToSupabase:', authErr);
+    authUserId = user.id;
+  } catch (authErr: any) {
+    console.error('[Supabase Auth Error]:', authErr);
+    throw new Error(authErr?.message || 'Please sign in to save');
   }
 
-  // 1. Generate valid RFC4122 UUID for item
+  // Generate UUID for row ID and timestamp for filename
   const itemId =
     typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
@@ -177,34 +262,46 @@ export async function addSpecimenToSupabase(params: {
           const v = c === 'x' ? r : (r & 0x3) | 0x8;
           return v.toString(16);
         });
-  const photoFilename = `${itemId}.jpg`;
-  const photoPath = `${authUserId}/${photoFilename}`;
 
-  // 2. Compress photo to max 1024px before storage upload
-  const compressedBase64 = await compressImageToMax1024(photoDataUrl);
-  const blob = dataURLtoBlob(compressedBase64);
+  // Step (b) path requirement: {user_id}/{timestamp}.jpg
+  const timestamp = Date.now();
+  const photoPath = `${authUserId}/${timestamp}.jpg`;
 
-  // 3. Upload to Supabase Storage 'scans' bucket at {user_id}/{filename}
-  let signedUrl = compressedBase64;
+  // Step (a): Compress the image to 1024px JPEG
+  let jpegBlob: Blob;
+  try {
+    jpegBlob = await compressImageToJpegBlob(photoDataUrl, 1024);
+  } catch (compressErr: any) {
+    console.error('[Compression Error]: Failed to compress image to 1024px JPEG:', compressErr);
+    throw new Error(compressErr?.message || 'Failed to compress image to 1024px JPEG');
+  }
+
+  // Step (b): Upload to the "scans" bucket at {user_id}/{timestamp}.jpg
   try {
     const { error: uploadError } = await supabase.storage
       .from('scans')
-      .upload(photoPath, blob, {
+      .upload(photoPath, jpegBlob, {
         contentType: 'image/jpeg',
         upsert: true,
       });
 
     if (uploadError) {
       console.error('[Supabase Storage Upload Error]:', uploadError);
-    } else {
-      const generated = await getSignedPhotoUrl(photoPath);
-      if (generated) signedUrl = generated;
+      throw new Error(uploadError.message || 'Failed to upload photo to scans bucket');
     }
-  } catch (err) {
-    console.error('[Supabase Storage Upload Exception]:', err);
+  } catch (storageErr: any) {
+    console.error('[Supabase Storage Exception]:', storageErr);
+    throw storageErr;
   }
 
-  // 4. Obtain location coordinates if permitted
+  // Step (c): Insert into collection_items with owner_id = user.id
+  let signedUrl = '';
+  try {
+    const generated = await getSignedPhotoUrl(photoPath);
+    if (generated) signedUrl = generated;
+  } catch {}
+
+  // Obtain location coordinates if permitted
   let lat: number | null = null;
   let lng: number | null = null;
   if (includeLocation && typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -215,30 +312,14 @@ export async function addSpecimenToSupabase(params: {
           maximumAge: 60000,
         });
       });
-      let rawLat = pos.coords.latitude;
-      let rawLng = pos.coords.longitude;
-
-      // Security requirement: Do not store exact locations of endangered species publicly
-      const isEndangered =
-        scanResult.safetyFlags?.endangered ||
-        deriveRarityTier(scanResult.conservationStatusCode) === 'Legendary';
-      if (isEndangered) {
-        // Obfuscate / round to ~10km (approx 0.1 degree)
-        lat = parseFloat(rawLat.toFixed(1));
-        lng = parseFloat(rawLng.toFixed(1));
-      } else {
-        lat = parseFloat(rawLat.toFixed(5));
-        lng = parseFloat(rawLng.toFixed(5));
-      }
+      lat = parseFloat(pos.coords.latitude.toFixed(5));
+      lng = parseFloat(pos.coords.longitude.toFixed(5));
     } catch (locErr) {
       console.info('Location skipped or unavailable:', locErr);
     }
   }
 
-  // 5. Derive rarity
   const rarity = deriveRarityTier(scanResult.conservationStatusCode);
-
-  // Prepare database record for collection_items table
   const validAlbumId = albumId && albumId !== 'default' && albumId !== 'all' ? albumId : null;
 
   const dbRow = {
@@ -256,13 +337,18 @@ export async function addSpecimenToSupabase(params: {
     created_at: new Date().toISOString(),
   };
 
-  const { error: insertError } = await supabase
-    .from('collection_items')
-    .insert([dbRow]);
+  try {
+    const { error: insertError } = await supabase
+      .from('collection_items')
+      .insert([dbRow]);
 
-  if (insertError) {
-    console.error('[Supabase Insert Error]: Failed to insert collection_item to Supabase:', insertError);
-    throw new Error(insertError.message || 'Could not save specimen to collection.');
+    if (insertError) {
+      console.error('[Supabase Insert Error]: Failed to insert collection_item to Supabase:', insertError);
+      throw new Error(insertError.message || 'Failed to insert row into collection_items');
+    }
+  } catch (dbErr: any) {
+    console.error('[Supabase Insert Exception]:', dbErr);
+    throw dbErr;
   }
 
   const newItem: CollectionItem = {
@@ -317,12 +403,12 @@ export async function getSupabaseUserCollection(userId?: string): Promise<Collec
     // Derive active session user ID to ensure exact match with auth.uid() in Supabase RLS
     let authUserId = userId;
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user?.id) {
-        authUserId = session.user.id;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) {
+        authUserId = user.id;
       }
     } catch (authErr) {
-      console.warn('[Supabase Auth Warning] Error retrieving session in getSupabaseUserCollection:', authErr);
+      console.warn('[Supabase Auth Warning] Error retrieving user in getSupabaseUserCollection:', authErr);
     }
 
     if (!authUserId) {

@@ -2,20 +2,98 @@ import React, { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 
 export const AuthModal: React.FC = () => {
-  const { authModalOpen, setAuthModalOpen, signInWithGoogle, isConfigured } = useAuth();
+  const { authModalOpen, setAuthModalOpen, signUpWithEmail, signInWithEmail, isConfigured } = useAuth();
+  const [mode, setMode] = useState<'signup' | 'signin'>('signup');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   if (!authModalOpen) return null;
 
-  const handleGoogleSignIn = async () => {
+  const validate = (): boolean => {
+    setError(null);
+    setInfoMessage(null);
+
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      setError('Please enter your email address.');
+      return false;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setError('Please enter a valid email address.');
+      return false;
+    }
+
+    if (mode === 'signup') {
+      const cleanUsername = username.trim();
+      if (!cleanUsername) {
+        setError('Please choose a username.');
+        return false;
+      }
+      const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
+      if (!usernameRegex.test(cleanUsername)) {
+        setError(
+          'Username must be between 3 and 20 characters and contain only letters, numbers, or underscores.'
+        );
+        return false;
+      }
+
+      if (!password || password.length < 8) {
+        setError('Password must be at least 8 characters long.');
+        return false;
+      }
+
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return false;
+      }
+    } else {
+      if (!password) {
+        setError('Please enter your password.');
+        return false;
+      }
+    }
+
+    return true;
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validate()) return;
+
     setLoading(true);
     setError(null);
+    setInfoMessage(null);
+
     try {
-      await signInWithGoogle();
+      if (mode === 'signup') {
+        const result = await signUpWithEmail(email, password, username);
+        if (result.user && !result.session) {
+          setInfoMessage('Account created! Please check your email to verify your registration.');
+        } else {
+          setAuthModalOpen(false);
+        }
+      } else {
+        await signInWithEmail(email, password);
+        setAuthModalOpen(false);
+      }
     } catch (err: any) {
-      if (err.code !== 'auth/popup-closed-by-user') {
-        setError(err.message || 'Google Sign-In failed. Please try again.');
+      const msg = err?.message || 'Authentication failed. Please try again.';
+      if (msg.toLowerCase().includes('already registered')) {
+        setError('An account with this email already exists. Try signing in.');
+      } else if (msg.toLowerCase().includes('invalid login credentials')) {
+        setError('Incorrect email or password.');
+      } else {
+        setError(msg);
       }
     } finally {
       setLoading(false);
@@ -24,7 +102,7 @@ export const AuthModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
-      <div className="relative w-full max-w-sm rounded-3xl bg-surface p-6 shadow-2xl border border-outline-variant/30 flex flex-col gap-4 text-center">
+      <div className="relative w-full max-w-sm rounded-3xl bg-surface p-6 shadow-2xl border border-outline-variant/30 flex flex-col gap-3 text-center max-h-[90vh] overflow-y-auto">
         {/* Close Button */}
         <button
           onClick={() => setAuthModalOpen(false)}
@@ -36,17 +114,53 @@ export const AuthModal: React.FC = () => {
         </button>
 
         {/* Tree Brand Icon */}
-        <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-container text-on-primary flex items-center justify-center shadow-md">
-          <span className="material-symbols-outlined text-[32px]">forest</span>
+        <div className="w-14 h-14 mx-auto rounded-2xl bg-primary-container text-on-primary flex items-center justify-center shadow-md">
+          <span className="material-symbols-outlined text-[28px]">forest</span>
         </div>
 
         <div>
           <h2 className="font-headline-sm text-headline-sm text-primary font-bold">
-            Sign in to WildDex
+            {mode === 'signup' ? 'Create Your Account' : 'Sign In to WildDex'}
           </h2>
-          <p className="font-body-sm text-xs text-on-surface-variant mt-1.5 leading-relaxed">
-            Connect with Google to catalog specimens into your personal Cloud Collection, organize field albums, and track biodiversity achievements.
+          <p className="font-body-sm text-xs text-on-surface-variant mt-1 leading-relaxed">
+            {mode === 'signup'
+              ? 'Join to catalog specimens, sync field albums, and track achievements.'
+              : 'Sign in with your email and password to access your collection.'}
           </p>
+        </div>
+
+        {/* Mode Toggle */}
+        <div className="w-full p-1 rounded-full bg-surface-container flex items-center mt-1">
+          <button
+            type="button"
+            onClick={() => {
+              setMode('signup');
+              setError(null);
+              setInfoMessage(null);
+            }}
+            className={`flex-1 py-1 rounded-full font-label-md text-xs font-bold transition-all ${
+              mode === 'signup'
+                ? 'bg-surface-container-lowest text-primary shadow-sm'
+                : 'text-on-surface-variant'
+            }`}
+          >
+            Sign Up
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setMode('signin');
+              setError(null);
+              setInfoMessage(null);
+            }}
+            className={`flex-1 py-1 rounded-full font-label-md text-xs font-bold transition-all ${
+              mode === 'signin'
+                ? 'bg-surface-container-lowest text-primary shadow-sm'
+                : 'text-on-surface-variant'
+            }`}
+          >
+            Sign In
+          </button>
         </div>
 
         {!isConfigured && (
@@ -59,49 +173,138 @@ export const AuthModal: React.FC = () => {
         )}
 
         {error && (
-          <div className="p-2.5 rounded-xl bg-error-container text-on-error-container text-xs text-left flex items-center gap-2">
+          <div className="p-2.5 rounded-xl bg-error-container text-on-error-container text-xs text-left flex items-start gap-2">
             <span className="material-symbols-outlined text-[18px] text-error shrink-0">error</span>
-            <span>{error}</span>
+            <span className="flex-1 leading-relaxed">{error}</span>
           </div>
         )}
 
-        <div className="space-y-2 pt-1">
-          {/* Google Sign In Button */}
+        {infoMessage && (
+          <div className="p-2.5 rounded-xl bg-secondary-container text-on-secondary-container text-xs text-left flex items-start gap-2">
+            <span className="material-symbols-outlined text-[18px] text-secondary shrink-0">check_circle</span>
+            <span className="flex-1 leading-relaxed">{infoMessage}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-2.5 text-left pt-1">
+          {mode === 'signup' && (
+            <div>
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+                Username
+              </label>
+              <div className="relative flex items-center">
+                <span className="material-symbols-outlined absolute left-3 text-[18px] text-outline pointer-events-none">
+                  person
+                </span>
+                <input
+                  type="text"
+                  required
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="e.g. naturalist_maya"
+                  className="w-full h-10 pl-9 pr-3 rounded-xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+                />
+              </div>
+              <p className="text-[10px] text-on-surface-variant mt-0.5 pl-1">
+                3–20 characters (letters, numbers, underscores)
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+              Email
+            </label>
+            <div className="relative flex items-center">
+              <span className="material-symbols-outlined absolute left-3 text-[18px] text-outline pointer-events-none">
+                mail
+              </span>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="explorer@example.com"
+                className="w-full h-10 pl-9 pr-3 rounded-xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+              Password
+            </label>
+            <div className="relative flex items-center">
+              <span className="material-symbols-outlined absolute left-3 text-[18px] text-outline pointer-events-none">
+                lock
+              </span>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="At least 8 characters"
+                className="w-full h-10 pl-9 pr-9 rounded-xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2.5 w-6 h-6 rounded-full flex items-center justify-center text-outline hover:text-on-surface"
+              >
+                <span className="material-symbols-outlined text-[16px]">
+                  {showPassword ? 'visibility_off' : 'visibility'}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {mode === 'signup' && (
+            <div>
+              <label className="block text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1">
+                Confirm Password
+              </label>
+              <div className="relative flex items-center">
+                <span className="material-symbols-outlined absolute left-3 text-[18px] text-outline pointer-events-none">
+                  lock_reset
+                </span>
+                <input
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Re-enter password"
+                  className="w-full h-10 pl-9 pr-9 rounded-xl bg-surface-container border border-outline-variant/40 text-on-surface text-xs font-medium focus:outline-none focus:ring-2 focus:ring-primary/40 shadow-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  className="absolute right-2.5 w-6 h-6 rounded-full flex items-center justify-center text-outline hover:text-on-surface"
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {showConfirmPassword ? 'visibility_off' : 'visibility'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
-            onClick={handleGoogleSignIn}
+            type="submit"
             disabled={loading}
-            type="button"
-            className="w-full py-3 px-4 rounded-full bg-primary text-on-primary font-label-lg font-bold flex items-center justify-center gap-3 shadow-md hover:opacity-95 active:scale-95 transition-all disabled:opacity-50"
+            className="w-full h-11 mt-3 rounded-full bg-primary text-on-primary font-label-md font-bold text-xs flex items-center justify-center gap-2 shadow-md hover:opacity-95 active:scale-95 transition-all disabled:opacity-50"
           >
             {loading ? (
-              <span className="material-symbols-outlined text-[20px] animate-spin">progress_activity</span>
+              <>
+                <span className="material-symbols-outlined text-[18px] animate-spin">
+                  progress_activity
+                </span>
+                <span>{mode === 'signup' ? 'Creating Account...' : 'Signing In...'}</span>
+              </>
             ) : (
-              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#ffffff"
-                  d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                />
-                <path
-                  fill="#acf4a4"
-                  d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                />
-                <path
-                  fill="#ffdbd1"
-                  d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                />
-                <path
-                  fill="#ffffff"
-                  d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                />
-              </svg>
+              <span>{mode === 'signup' ? 'Sign Up' : 'Sign In'}</span>
             )}
-            <span>{loading ? 'Connecting...' : 'Continue with Google'}</span>
           </button>
-
-          <p className="font-label-sm text-[11px] text-outline text-center">
-            By signing in, your field discoveries and species logs will sync securely across your devices.
-          </p>
-        </div>
+        </form>
       </div>
     </div>
   );

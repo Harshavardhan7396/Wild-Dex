@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   scanSpecimenImage,
+  compressImage,
   getAllScannerTestCases,
   EnrichedSpecimenScanResult,
 } from '../services/scannerService';
@@ -10,15 +11,14 @@ import {
   GEMINI_SCANNER_MODEL,
   ScannerTestCase,
 } from '../config/scannerPrompt';
-import {
-  addSpecimenToCollection,
-  isSpeciesCollected,
-} from '../services/collectionService';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import {
   addSpecimenToFirebase,
   getFirebaseUserAlbums,
   FirebaseAlbum,
+  compressImageToJpegBlob,
+  deriveRarityTier,
 } from '../services/supabaseCollectionService';
 import { InfoTooltip } from '../components/common/InfoTooltip';
 import {
@@ -43,11 +43,21 @@ export const ScannerPage: React.FC = () => {
 
   // Scanning & AI states
   const [isScanning, setIsScanning] = useState(false);
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const [scanStep, setScanStep] = useState<string>('Initializing sensor...');
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [showResult, setShowResult] = useState(true);
+  const [showResult, setShowResult] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [retryImagePayload, setRetryImagePayload] = useState<string | null>(null);
+
+  // 15-second cooldown timer on the scan button after each scan
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setCooldownSeconds((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownSeconds]);
 
   // Feedback, collection & share
   const { currentUser, setAuthModalOpen } = useAuth();
@@ -67,18 +77,8 @@ export const ScannerPage: React.FC = () => {
 
   const testCases = getAllScannerTestCases();
 
-  // Active scan result state (pre-initialized with high-clarity Monarch butterfly canonical test case)
-  const [scanResult, setScanResult] = useState<EnrichedSpecimenScanResult>({
-    ...testCases[0].expectedOutput,
-    enrichedPhotos: [
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz',
-    ],
-    photoCredit: 'Verified iNaturalist Observation',
-    wikiDescription:
-      'The monarch butterfly or simply monarch is a milkweed butterfly in the family Nymphalidae. Other common names, depending on region, include milkweed, common tiger, wanderer, and black-veined brown.',
-    iNatObservationsCount: 38450,
-    matchedSpeciesId: 'monarch-butterfly',
-  });
+  // Active scan result state (shows result only after a real Gemini response)
+  const [scanResult, setScanResult] = useState<EnrichedSpecimenScanResult | null>(null);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -145,11 +145,38 @@ export const ScannerPage: React.FC = () => {
     }
   }, [hasCamera]);
 
-  // Sync collection status
+  // Sync collection status directly with Supabase collection_items table
   useEffect(() => {
-    if (scanResult && scanResult.scientificName) {
-      setIsSavedInDex(isSpeciesCollected(scanResult.scientificName));
-    }
+    let isSubscribed = true;
+    const checkCollectionStatus = async () => {
+      if (!scanResult?.scientificName) {
+        setIsSavedInDex(false);
+        return;
+      }
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setIsSavedInDex(false);
+          return;
+        }
+        const { data, error } = await supabase
+          .from('collection_items')
+          .select('id')
+          .eq('owner_id', user.id)
+          .ilike('scientific_name', scanResult.scientificName)
+          .limit(1);
+
+        if (isSubscribed) {
+          setIsSavedInDex(!error && Boolean(data && data.length > 0));
+        }
+      } catch {
+        if (isSubscribed) setIsSavedInDex(false);
+      }
+    };
+    checkCollectionStatus();
+    return () => {
+      isSubscribed = false;
+    };
   }, [scanResult]);
 
   // Fetch albums for save selection
@@ -165,6 +192,8 @@ export const ScannerPage: React.FC = () => {
 
   // Core specimen identification runner
   const performIdentification = async (imageDataUrl: string, testCaseIdToRun?: string) => {
+    if (isScanning || cooldownSeconds > 0) return;
+
     setIsScanning(true);
     setScanError(null);
     setRetryImagePayload(imageDataUrl);
@@ -183,7 +212,6 @@ export const ScannerPage: React.FC = () => {
 
       setScanResult(enrichedResult);
       setShowResult(true);
-      setIsSavedInDex(isSpeciesCollected(enrichedResult.scientificName));
 
       if (enrichedResult.notASpecies) {
         showToast('Not an animal or plant');
@@ -201,12 +229,14 @@ export const ScannerPage: React.FC = () => {
       showToast('Scan could not complete. Check error guidance.');
     } finally {
       setIsScanning(false);
+      // Requirement: 15-second cooldown on the scan button after each scan
+      setCooldownSeconds(15);
     }
   };
 
   // Trigger camera capture shutter
   const handleTriggerShutter = async () => {
-    if (isScanning) return;
+    if (isScanning || cooldownSeconds > 0) return;
 
     let imgData: string | null = null;
 
@@ -245,6 +275,10 @@ export const ScannerPage: React.FC = () => {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (isScanning || cooldownSeconds > 0) {
+        showToast(`Please wait ${cooldownSeconds}s before scanning again.`);
+        return;
+      }
       if (!file.type.startsWith('image/')) {
         showToast('Please select a valid image file (JPEG, PNG, WebP).');
         return;
@@ -252,8 +286,15 @@ export const ScannerPage: React.FC = () => {
       const reader = new FileReader();
       reader.onload = async () => {
         const rawUrl = reader.result as string;
-        setCapturedImage(rawUrl);
-        await performIdentification(rawUrl);
+        try {
+          // Resize and compress uploaded image to a maximum of 1024px JPEG before sending
+          const compressed = await compressImage(rawUrl, 1024);
+          setCapturedImage(compressed);
+          await performIdentification(compressed);
+        } catch {
+          setCapturedImage(rawUrl);
+          await performIdentification(rawUrl);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -261,6 +302,10 @@ export const ScannerPage: React.FC = () => {
 
   // Switch to a canonical test case
   const handleSelectTestCase = async (tc: ScannerTestCase) => {
+    if (isScanning || cooldownSeconds > 0) {
+      showToast(`Please wait ${cooldownSeconds}s before scanning again.`);
+      return;
+    }
     setSelectedTestCaseId(tc.id);
     setShowTestCasesModal(false);
     setCapturedImage(null);
@@ -270,6 +315,7 @@ export const ScannerPage: React.FC = () => {
 
   // ACTION 1: View Details in Species Encyclopedia
   const handleViewDetails = () => {
+    if (!scanResult) return;
     if (scanResult.notASpecies) {
       showToast('Non-biological item cannot be viewed in species encyclopedia.');
       return;
@@ -282,60 +328,145 @@ export const ScannerPage: React.FC = () => {
     navigate(`/species/${encodeURIComponent(routeTarget)}`);
   };
 
-  // ACTION 2: Add to Collection (Protected behind Google Auth)
-  const handleAddToCollection = () => {
+  // ACTION 2: Add to Collection (Direct Supabase Storage + Database workflow)
+  const handleAddToCollection = async () => {
+    if (!scanResult) {
+      console.warn('[Save Warning] No specimen scan result to save.');
+      return;
+    }
     if (scanResult.notASpecies) {
       showToast('Only animals and plants can be saved to your collection.');
       return;
     }
 
-    if (!currentUser) {
+    if (isSavingToDex) return;
+
+    // Requirement 2: Before saving, call supabase.auth.getUser(). If there is no real user, show "Please sign in to save" and stop.
+    let user: any = null;
+    try {
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+      if (userError || !userData?.user) {
+        console.warn('[Supabase Auth Warning] No active authenticated user session:', userError);
+        setSaveError('Please sign in to save');
+        showToast('Please sign in to save');
+        setAuthModalOpen(true);
+        return;
+      }
+      user = userData.user;
+    } catch (authException: any) {
+      console.error('[Supabase Auth Exception]:', authException);
+      setSaveError('Please sign in to save');
+      showToast('Please sign in to save');
       setAuthModalOpen(true);
-      showToast('Please sign in with Google to save to your collection.');
       return;
     }
 
-    setSaveError(null);
-    setShowSaveModal(true);
-  };
-
-  const handleConfirmSaveToFirebase = async () => {
-    if (!currentUser) return;
     setIsSavingToDex(true);
     setSaveError(null);
+
+    // Requirement 3: Do the steps in this order, and wrap each in its own try/catch that shows the exact Supabase error message on screen and logs it to the console:
+
+    // (a) compress the image to 1024px JPEG
+    let jpegBlob: Blob;
     try {
-      const bestPhoto =
+      const sourceImage =
         capturedImage ||
         (scanResult.enrichedPhotos && scanResult.enrichedPhotos[0]) ||
         'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz';
 
-      await addSpecimenToFirebase({
-        userId: currentUser.uid,
-        scanResult,
-        photoDataUrl: bestPhoto,
-        albumId: selectedAlbumId,
-        notes: saveNotes,
-        includeLocation: includeGps,
-      });
-
-      // Also sync to local collection for offline preview
-      addSpecimenToCollection(scanResult, capturedImage || undefined, bestPhoto);
-      setIsSavedInDex(true);
-      setShowSaveModal(false);
-      showToast(`Saved ${scanResult.commonName} to My Collection!`);
-    } catch (err: any) {
-      console.error('[Supabase Save Error] Failed to save specimen to Supabase:', err);
-      setSaveError(
-        err?.message ||
-          'Could not save to Supabase database. Please check permissions and connection, then retry.'
-      );
-    } finally {
+      jpegBlob = await compressImageToJpegBlob(sourceImage, 1024);
+    } catch (compressErr: any) {
+      const errMsg = compressErr?.message || 'Failed to compress image to 1024px JPEG.';
+      console.error('[Compression Error]:', compressErr);
+      setSaveError(errMsg);
+      showToast(errMsg);
       setIsSavingToDex(false);
+      return;
     }
+
+    // (b) upload to the "scans" bucket at {user_id}/{timestamp}.jpg
+    const timestamp = Date.now();
+    const photoPath = `${user.id}/${timestamp}.jpg`;
+    try {
+      const { error: uploadError } = await supabase.storage
+        .from('scans')
+        .upload(photoPath, jpegBlob, {
+          contentType: 'image/jpeg',
+          upsert: true,
+        });
+
+      if (uploadError) {
+        console.error('[Supabase Storage Error]:', uploadError);
+        const errMsg = uploadError.message || 'Failed to upload photo to scans bucket.';
+        setSaveError(errMsg);
+        showToast(errMsg);
+        setIsSavingToDex(false);
+        return;
+      }
+    } catch (storageException: any) {
+      console.error('[Supabase Storage Exception]:', storageException);
+      const errMsg = storageException?.message || 'Storage upload exception.';
+      setSaveError(errMsg);
+      showToast(errMsg);
+      setIsSavingToDex(false);
+      return;
+    }
+
+    // (c) insert into collection_items with owner_id = user.id
+    try {
+      const rarity = deriveRarityTier(scanResult.conservationStatusCode);
+      const dbRow = {
+        owner_id: user.id,
+        album_id: selectedAlbumId && selectedAlbumId !== 'default' && selectedAlbumId !== 'all' ? selectedAlbumId : null,
+        species_name: scanResult.commonName,
+        scientific_name: scanResult.scientificName,
+        category: scanResult.category || 'other',
+        confidence: scanResult.confidence || 0.95,
+        rarity: rarity,
+        photo_path: photoPath,
+        lat: null,
+        lng: null,
+        created_at: new Date().toISOString(),
+      };
+
+      const { error: insertError } = await supabase
+        .from('collection_items')
+        .insert([dbRow]);
+
+      if (insertError) {
+        console.error('[Supabase Database Insert Error]:', insertError);
+        const errMsg = insertError.message || 'Failed to insert row into collection_items.';
+        setSaveError(errMsg);
+        showToast(errMsg);
+        setIsSavingToDex(false);
+        return;
+      }
+    } catch (insertException: any) {
+      console.error('[Supabase Database Exception]:', insertException);
+      const errMsg = insertException?.message || 'Database insert exception.';
+      setSaveError(errMsg);
+      showToast(errMsg);
+      setIsSavingToDex(false);
+      return;
+    }
+
+    // Requirement 4: Show "Saved to My Collection" only after the insert succeeds. On any failure, show the error with a Retry button.
+    setIsSavingToDex(false);
+    setIsSavedInDex(true);
+    setSaveError(null);
+    setShowSaveModal(false);
+    showToast('Saved to My Collection');
+
+    // Refresh collection list without needing a page reload
+    window.dispatchEvent(new CustomEvent('wilddex:collection_updated'));
+    window.dispatchEvent(new CustomEvent('wilddex:item_saved'));
   };
+
+  const handleConfirmSaveToFirebase = handleAddToCollection;
 
   // ACTION 3: Share Discovery
   const handleShare = async () => {
+    if (!scanResult) return;
     const shareUrl = window.location.origin + '/species/' + encodeURIComponent(scanResult.scientificName);
     const shareTitle = `WildDex: ${scanResult.commonName}`;
     const shareText = `I found a ${scanResult.commonName} (${scanResult.scientificName}) with ${(scanResult.confidence * 100).toFixed(0)}% match score using WildDex!`;
@@ -366,7 +497,7 @@ export const ScannerPage: React.FC = () => {
     setShowShareModal(true);
   };
 
-  const isLowConfidence = scanResult.confidence < 0.6 && !scanResult.notASpecies;
+  const isLowConfidence = Boolean(scanResult && scanResult.confidence < 0.6 && !scanResult.notASpecies);
 
   return (
     <div className="flex flex-col w-full relative select-none overflow-hidden pb-12 max-w-4xl mx-auto">
@@ -507,27 +638,56 @@ export const ScannerPage: React.FC = () => {
           ></div>
 
           {/* Live Floating Target Pill */}
-          <div className="self-center bg-inverse-surface/90 backdrop-blur-md px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg mb-2">
-            <span
-              className={`material-symbols-outlined text-[16px] text-secondary-fixed ${
-                isScanning ? 'animate-spin' : ''
-              }`}
-            >
-              {isScanning ? 'sync' : 'psychology'}
-            </span>
-            <span className="font-label-sm text-label-sm text-inverse-on-surface font-semibold tracking-tight truncate max-w-[130px]">
-              {isScanning ? 'Scanning...' : scanResult.commonName}
-            </span>
-            <span
-              className={`px-1.5 py-0.5 rounded-full font-label-sm text-[10px] font-bold ${
-                scanResult.confidence >= 0.6
-                  ? 'bg-primary-container text-on-primary-container'
-                  : 'bg-tertiary-container text-on-tertiary'
-              }`}
-            >
-              {(scanResult.confidence * 100).toFixed(0)}%
-            </span>
-          </div>
+          {scanResult ? (
+            <div className="self-center bg-inverse-surface/90 backdrop-blur-md px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg mb-2">
+              <span
+                className={`material-symbols-outlined text-[16px] text-secondary-fixed ${
+                  isScanning ? 'animate-spin' : ''
+                }`}
+              >
+                {isScanning ? 'sync' : 'psychology'}
+              </span>
+              <span className="font-label-sm text-label-sm text-inverse-on-surface font-semibold tracking-tight truncate max-w-[130px]">
+                {isScanning ? 'Scanning...' : scanResult.commonName}
+              </span>
+              <span
+                className={`px-1.5 py-0.5 rounded-full font-label-sm text-[10px] font-bold ${
+                  scanResult.confidence >= 0.6
+                    ? 'bg-primary-container text-on-primary-container'
+                    : 'bg-tertiary-container text-on-tertiary'
+                }`}
+              >
+                {(scanResult.confidence * 100).toFixed(0)}%
+              </span>
+            </div>
+          ) : isScanning ? (
+            <div className="self-center bg-inverse-surface/90 backdrop-blur-md px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg mb-2">
+              <span className="material-symbols-outlined text-[16px] text-secondary-fixed animate-spin">
+                sync
+              </span>
+              <span className="font-label-sm text-label-sm text-inverse-on-surface font-semibold tracking-tight">
+                Scanning...
+              </span>
+            </div>
+          ) : cooldownSeconds > 0 ? (
+            <div className="self-center bg-inverse-surface/80 backdrop-blur-md px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg mb-2">
+              <span className="material-symbols-outlined text-[16px] text-tertiary-fixed">
+                hourglass_top
+              </span>
+              <span className="font-label-sm text-label-sm text-inverse-on-surface font-medium tracking-tight">
+                Cooldown: {cooldownSeconds}s
+              </span>
+            </div>
+          ) : (
+            <div className="self-center bg-inverse-surface/80 backdrop-blur-md px-3.5 py-1.5 rounded-full flex items-center gap-2 shadow-lg mb-2">
+              <span className="material-symbols-outlined text-[16px] text-secondary-fixed">
+                center_focus_strong
+              </span>
+              <span className="font-label-sm text-label-sm text-inverse-on-surface font-medium tracking-tight">
+                Ready to Scan
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Viewfinder Mode Switcher Pills */}
@@ -589,17 +749,25 @@ export const ScannerPage: React.FC = () => {
 
           <div className="flex items-center gap-2 pt-1">
             <button
+              disabled={isScanning || cooldownSeconds > 0}
               onClick={() => {
+                if (isScanning || cooldownSeconds > 0) return;
                 if (retryImagePayload) {
                   performIdentification(retryImagePayload);
                 } else {
                   handleTriggerShutter();
                 }
               }}
-              className="flex-1 py-2 rounded-full bg-error text-on-error font-label-md text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform"
+              className={`flex-1 py-2 rounded-full font-label-md text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform ${
+                cooldownSeconds > 0 || isScanning
+                  ? 'bg-surface-container-high text-on-surface-variant/70 cursor-not-allowed opacity-80'
+                  : 'bg-error text-on-error'
+              }`}
             >
-              <span className="material-symbols-outlined text-[16px]">refresh</span>
-              <span>Retry Scan</span>
+              <span className={`material-symbols-outlined text-[16px] ${isScanning ? 'animate-spin' : ''}`}>
+                {cooldownSeconds > 0 ? 'hourglass_top' : 'refresh'}
+              </span>
+              <span>{cooldownSeconds > 0 ? `Wait ${cooldownSeconds}s` : 'Retry Scan'}</span>
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -634,26 +802,45 @@ export const ScannerPage: React.FC = () => {
           <span className="material-symbols-outlined text-[24px] text-primary">add_photo_alternate</span>
         </button>
 
-        {/* Haptic AI Shutter Trigger Button */}
+        {/* Haptic AI Shutter Trigger Button with 15s Cooldown */}
         <button
-          aria-label="Analyze Specimen"
+          aria-label={cooldownSeconds > 0 ? `Cooldown: Wait ${cooldownSeconds}s` : "Analyze Specimen"}
           id="shutter-btn"
-          disabled={isScanning}
+          disabled={isScanning || cooldownSeconds > 0}
           onClick={handleTriggerShutter}
           className={`relative group w-20 h-20 rounded-full bg-surface-container flex items-center justify-center shadow-lg active:scale-90 transition-all ${
-            isScanning ? 'opacity-70 cursor-not-allowed' : ''
+            isScanning || cooldownSeconds > 0 ? 'opacity-85 cursor-not-allowed' : ''
           }`}
+          title={cooldownSeconds > 0 ? `Cooldown: Wait ${cooldownSeconds}s` : "Analyze Specimen"}
         >
-          <div className="absolute inset-1 rounded-full bg-gradient-to-tr from-secondary to-primary-fixed shadow-[0_0_18px_rgba(165,214,167,0.6)]"></div>
-          <div className="relative w-14 h-14 rounded-full bg-surface flex items-center justify-center shadow-inner group-active:scale-95 transition-transform">
-            <span
-              className={`material-symbols-outlined text-[28px] text-primary ${
-                isScanning ? 'animate-spin' : ''
-              }`}
-              style={{ fontVariationSettings: "'FILL' 1" }}
-            >
-              {isScanning ? 'sync' : 'lens'}
-            </span>
+          <div
+            className={`absolute inset-1 rounded-full transition-all ${
+              cooldownSeconds > 0
+                ? 'bg-surface-container-highest border border-outline-variant/40'
+                : 'bg-gradient-to-tr from-secondary to-primary-fixed shadow-[0_0_18px_rgba(165,214,167,0.6)]'
+            }`}
+          ></div>
+          <div className="relative w-14 h-14 rounded-full bg-surface flex flex-col items-center justify-center shadow-inner group-active:scale-95 transition-transform">
+            {isScanning ? (
+              <span
+                className="material-symbols-outlined text-[28px] text-primary animate-spin"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                sync
+              </span>
+            ) : cooldownSeconds > 0 ? (
+              <div className="flex flex-col items-center justify-center leading-none select-none text-center">
+                <span className="text-primary font-bold text-sm tabular-nums">{cooldownSeconds}s</span>
+                <span className="text-[9px] text-on-surface-variant font-medium uppercase tracking-tight mt-0.5">Wait</span>
+              </div>
+            ) : (
+              <span
+                className="material-symbols-outlined text-[28px] text-primary"
+                style={{ fontVariationSettings: "'FILL' 1" }}
+              >
+                lens
+              </span>
+            )}
           </div>
         </button>
 
@@ -670,7 +857,7 @@ export const ScannerPage: React.FC = () => {
       </div>
 
       {/* SCAN RESULT SHEET / DISCOVERY DRAWER */}
-      {showResult && !isScanning && (
+      {showResult && !isScanning && scanResult && (
         <section className="mt-2 mx-margin bg-surface-container-low rounded-3xl p-space-md shadow-xl flex flex-col gap-space-md relative overflow-hidden animate-in fade-in slide-in-from-bottom-8 border border-outline-variant/30">
           {/* Drag Handle & Header */}
           <div className="flex flex-col items-center gap-1.5">
@@ -983,6 +1170,28 @@ export const ScannerPage: React.FC = () => {
             </div>
           )}
 
+          {/* Visible Save Error with Retry Button (Requirement 4) */}
+          {saveError && (
+            <div className="p-3.5 rounded-2xl bg-error-container text-on-error-container text-xs flex flex-col gap-2 border border-error/30 animate-in fade-in">
+              <div className="flex items-start gap-2.5">
+                <span className="material-symbols-outlined text-[20px] text-error shrink-0 mt-0.5">error</span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-on-error-container">Could Not Save Specimen</p>
+                  <p className="opacity-90 mt-0.5 leading-relaxed break-words">{saveError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleAddToCollection}
+                disabled={isSavingToDex}
+                className="self-end px-4 py-1.5 rounded-full bg-error text-on-error font-bold text-xs shadow-sm hover:opacity-90 active:scale-95 transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <span className="material-symbols-outlined text-[16px]">refresh</span>
+                <span>Retry</span>
+              </button>
+            </div>
+          )}
+
           {/* WIRED UP SCAN RESULT SHEET BUTTONS: View Details, Add to Collection, Share */}
           <div className="flex items-center gap-2 pt-2">
             {/* 1. View Details Button */}
@@ -1001,23 +1210,29 @@ export const ScannerPage: React.FC = () => {
 
             {/* 2. Add to Collection Button */}
             <button
-              aria-label={isSavedInDex ? 'Saved in Collection' : 'Add to Collection'}
+              aria-label={isSavingToDex ? 'Saving to Collection...' : isSavedInDex ? 'Saved in Collection' : 'Add to Collection'}
               onClick={handleAddToCollection}
-              disabled={scanResult.notASpecies}
+              disabled={scanResult.notASpecies || isSavingToDex}
               className={`w-12 h-12 rounded-full flex items-center justify-center active:scale-95 transition-all shadow-sm ${
                 isSavedInDex
                   ? 'bg-secondary text-on-secondary ring-2 ring-secondary/50'
                   : 'bg-secondary-container text-on-secondary-container hover:bg-secondary-container/80'
               }`}
               type="button"
-              title={isSavedInDex ? 'Saved in Collection' : 'Save to Collection'}
+              title={isSavedInDex ? 'Saved to My Collection' : 'Add to Collection'}
             >
-              <span
-                className="material-symbols-outlined text-[20px]"
-                style={{ fontVariationSettings: isSavedInDex ? "'FILL' 1" : "'FILL' 0" }}
-              >
-                {isSavedInDex ? 'check' : 'bookmark_add'}
-              </span>
+              {isSavingToDex ? (
+                <span className="material-symbols-outlined text-[20px] animate-spin">
+                  progress_activity
+                </span>
+              ) : (
+                <span
+                  className="material-symbols-outlined text-[20px]"
+                  style={{ fontVariationSettings: isSavedInDex ? "'FILL' 1" : "'FILL' 0" }}
+                >
+                  {isSavedInDex ? 'check' : 'bookmark_add'}
+                </span>
+              )}
             </button>
 
             {/* 3. Share Button */}
@@ -1035,7 +1250,7 @@ export const ScannerPage: React.FC = () => {
       )}
 
       {/* SHARE MODAL DIALOG */}
-      {showShareModal && (
+      {showShareModal && scanResult && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="w-full max-w-sm bg-surface rounded-3xl p-6 shadow-2xl flex flex-col gap-4 border border-outline-variant/30">
             <div className="flex items-center justify-between pb-2 border-b border-outline-variant/20">
@@ -1100,7 +1315,7 @@ export const ScannerPage: React.FC = () => {
       )}
 
       {/* MODAL: ADD SPECIMEN TO FIRESTORE & STORAGE */}
-      {showSaveModal && (
+      {showSaveModal && scanResult && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
           <div className="w-full max-w-md bg-surface rounded-3xl p-6 shadow-2xl flex flex-col gap-4 border border-outline-variant/30 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-outline-variant/20">

@@ -35,7 +35,7 @@ export const AuthPromptCard: React.FC<AuthPromptCardProps> = ({
         className="px-6 py-3 rounded-full bg-primary text-on-primary font-label-lg font-bold flex items-center gap-2.5 shadow-md hover:opacity-95 active:scale-95 transition-all mt-2"
       >
         <span className="material-symbols-outlined text-[20px]">login</span>
-        <span>Sign in with Google</span>
+        <span>Sign In or Sign Up</span>
       </button>
     </div>
   );

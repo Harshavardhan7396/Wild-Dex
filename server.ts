@@ -23,16 +23,6 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// Initialize GoogleGenAI client with required User-Agent header
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
-
 /**
  * Endpoint to run the 5 canonical scanner test cases
  */
@@ -77,15 +67,21 @@ app.post('/api/scan', async (req, res) => {
 
     // Check if GEMINI_API_KEY is configured
     if (!process.env.GEMINI_API_KEY) {
-      console.warn('GEMINI_API_KEY is unset. Using realistic mock fallback.');
-      const fallbackResult: SpecimenScanResult = SCANNER_TEST_CASES[0].expectedOutput;
-      return res.json({
-        success: true,
-        model: GEMINI_SCANNER_MODEL,
-        simulated: true,
-        data: fallbackResult,
+      console.warn('GEMINI_API_KEY is not configured in environment variables.');
+      return res.status(401).json({
+        success: false,
+        error: 'Gemini API key is not configured. Please set your GEMINI_API_KEY in Settings > Secrets.',
       });
     }
+
+    const aiClient = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
 
     const imagePart = {
       inlineData: {
@@ -98,7 +94,7 @@ app.post('/api/scan', async (req, res) => {
       text: SCANNER_USER_PROMPT,
     };
 
-    const response = await ai.models.generateContent({
+    const response = await aiClient.models.generateContent({
       model: GEMINI_SCANNER_MODEL,
       contents: {
         parts: [imagePart, textPart],
@@ -173,8 +169,11 @@ app.post('/api/scan', async (req, res) => {
       },
     });
 
-    const responseText = response.text?.trim() || '{}';
-    const parsedData: SpecimenScanResult = JSON.parse(responseText);
+    let cleanJson = (response.text || '').trim();
+    if (cleanJson.startsWith('```')) {
+      cleanJson = cleanJson.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    }
+    const parsedData: SpecimenScanResult = JSON.parse(cleanJson || '{}');
 
     return res.json({
       success: true,
@@ -182,10 +181,61 @@ app.post('/api/scan', async (req, res) => {
       data: parsedData,
     });
   } catch (error: any) {
-    console.error('Gemini Scanner Error:', error);
-    return res.status(500).json({
+    console.error('Gemini Scanner Error details:', error);
+    let rawMessage = error?.message || 'Failed to analyze specimen with Gemini model.';
+    let statusCode = 500;
+
+    // Extract nested error details if message is stringified JSON from @google/genai
+    try {
+      if (typeof rawMessage === 'string' && rawMessage.trim().startsWith('{')) {
+        const parsed = JSON.parse(rawMessage);
+        if (parsed?.error?.message) {
+          rawMessage = parsed.error.message;
+        }
+        if (typeof parsed?.error?.code === 'number') {
+          statusCode = parsed.error.code;
+        }
+      }
+    } catch {}
+
+    const isHighDemandOrQuota =
+      statusCode === 429 ||
+      statusCode === 503 ||
+      statusCode === 502 ||
+      statusCode === 504 ||
+      rawMessage.includes('429') ||
+      rawMessage.includes('503') ||
+      rawMessage.includes('RESOURCE_EXHAUSTED') ||
+      rawMessage.includes('UNAVAILABLE') ||
+      rawMessage.toLowerCase().includes('high demand') ||
+      rawMessage.toLowerCase().includes('quota') ||
+      rawMessage.toLowerCase().includes('rate limit');
+
+    const isAuthOrKeyError =
+      statusCode === 403 ||
+      statusCode === 401 ||
+      rawMessage.includes('403') ||
+      rawMessage.includes('401') ||
+      rawMessage.includes('PERMISSION_DENIED') ||
+      rawMessage.includes('API_KEY_INVALID');
+
+    // Nginx intercepts 403, 502, 503, 504 and serves HTML error pages instead of JSON.
+    // Map them to 429 (Too Many Requests / High Demand) and 401 (Unauthorized) so Nginx passes JSON through.
+    if (isHighDemandOrQuota) {
+      statusCode = 429;
+    } else if (isAuthOrKeyError) {
+      statusCode = 401;
+    } else if (statusCode === 404 || rawMessage.includes('404') || rawMessage.includes('NOT_FOUND')) {
+      statusCode = 404;
+    } else if (statusCode < 400 || statusCode >= 600) {
+      statusCode = 500;
+    }
+
+    return res.status(statusCode).json({
       success: false,
-      error: error?.message || 'Failed to analyze specimen with Gemini model.',
+      error: rawMessage,
+      statusCode,
+      details: error?.error || error?.details || undefined,
     });
   }
 });

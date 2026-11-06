@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { AuthPromptCard } from '../components/auth/AuthPromptCard';
 import { InfoTooltip } from '../components/common/InfoTooltip';
 import {
   FirebaseCollectionItem,
   FirebaseAlbum,
+  getSupabaseUserCollection,
   getFirebaseUserCollection,
   subscribeToFirebaseUserCollection,
   subscribeToFirebaseUserAlbums,
@@ -49,9 +51,18 @@ export const CollectionPage: React.FC = () => {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // Direct fetch function with visible error handling
+  // Direct fetch function querying collection_items from Supabase with visible error handling
   const loadData = useCallback(async () => {
-    if (!currentUser) {
+    // Check Supabase authenticated user directly
+    let effectiveUserId = currentUser?.uid || currentUser?.id;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) {
+        effectiveUserId = user.id;
+      }
+    } catch {}
+
+    if (!effectiveUserId) {
       setLoading(false);
       setSpecimens([]);
       return;
@@ -61,7 +72,7 @@ export const CollectionPage: React.FC = () => {
     setError(null);
 
     try {
-      const items = await getFirebaseUserCollection(currentUser.uid);
+      const items = await getSupabaseUserCollection(effectiveUserId);
       setSpecimens(items);
       setLoading(false);
     } catch (err: any) {

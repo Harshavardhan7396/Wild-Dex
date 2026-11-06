@@ -6,7 +6,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { LoginScreen } from '../auth/LoginScreen';
 
 export const AppLayout: React.FC = () => {
-  const { currentUser, loading } = useAuth();
+  const { currentUser, loading, isGuest } = useAuth();
 
   if (loading) {
     return (
@@ -23,7 +23,7 @@ export const AppLayout: React.FC = () => {
     );
   }
 
-  if (!currentUser) {
+  if (!currentUser && !isGuest) {
     return (
       <div className="bg-surface text-on-surface font-body-md antialiased min-h-screen flex flex-col selection:bg-secondary-container">
         <Header />

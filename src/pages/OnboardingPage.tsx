@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 export const OnboardingPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, userProfile, signInWithGoogle, updateUserProfile } = useAuth();
+  const { currentUser, userProfile, setAuthModalOpen, updateUserProfile } = useAuth();
   const [currentStep, setCurrentStep] = useState(1);
   const [experience, setExperience] = useState<'novice' | 'enthusiast' | 'researcher'>(
     userProfile?.experienceLevel || 'enthusiast'
@@ -258,7 +258,7 @@ export const OnboardingPage: React.FC = () => {
                   {currentUser ? currentUser.displayName || currentUser.email : 'Guest Explorer'}
                 </p>
                 <p className="text-xs text-on-surface-variant">
-                  {currentUser ? 'Signed in with Google' : 'Connect to save discoveries'}
+                  {currentUser ? 'Account Connected' : 'Connect to save discoveries'}
                 </p>
               </div>
             </div>
@@ -266,7 +266,7 @@ export const OnboardingPage: React.FC = () => {
             {!currentUser && (
               <button
                 type="button"
-                onClick={() => signInWithGoogle()}
+                onClick={() => setAuthModalOpen(true)}
                 className="px-4 py-2 rounded-full bg-primary text-on-primary font-label-md text-xs font-bold hover:opacity-90 active:scale-95 transition-all shadow-sm"
               >
                 Sign In

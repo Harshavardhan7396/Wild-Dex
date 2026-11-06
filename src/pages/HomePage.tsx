@@ -8,9 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, userProfile, loading: authLoading, signInWithGoogle } = useAuth();
-  const [signingIn, setSigningIn] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
+  const { currentUser, userProfile } = useAuth();
   const [speciesOfDay] = useState<Species>(() => getSpeciesOfTheDay());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -47,20 +45,6 @@ export const HomePage: React.FC = () => {
     e.preventDefault();
     if (searchQuery.trim()) {
       navigate(`/explore?q=${encodeURIComponent(searchQuery.trim())}`);
-    }
-  };
-
-  const handleGoogleSignIn = async () => {
-    setSigningIn(true);
-    setAuthError(null);
-    try {
-      await signInWithGoogle();
-    } catch (err: any) {
-      if (err?.code !== 'auth/popup-closed-by-user') {
-        setAuthError(err?.message || 'Google Sign-In failed. Please try again.');
-      }
-    } finally {
-      setSigningIn(false);
     }
   };
 
