@@ -194,6 +194,24 @@ export const ScannerPage: React.FC = () => {
   const performIdentification = async (imageDataUrl: string, testCaseIdToRun?: string) => {
     if (isScanning || cooldownSeconds > 0) return;
 
+    // Requirement 4: If the user is not signed in, show "Please sign in to scan"
+    if (!testCaseIdToRun) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setScanError('Please sign in to scan');
+          showToast('Please sign in to scan');
+          setAuthModalOpen(true);
+          return;
+        }
+      } catch {
+        setScanError('Please sign in to scan');
+        showToast('Please sign in to scan');
+        setAuthModalOpen(true);
+        return;
+      }
+    }
+
     setIsScanning(true);
     setScanError(null);
     setRetryImagePayload(imageDataUrl);
@@ -204,8 +222,8 @@ export const ScannerPage: React.FC = () => {
       setScanStep('Compressing image to 1024px maximum...');
       await new Promise((r) => setTimeout(r, 200));
 
-      setScanStep(`Sending image to ${GEMINI_SCANNER_MODEL}...`);
-      const enrichedResult = await scanSpecimenImage(imageDataUrl, testCaseIdToRun);
+      setScanStep('Analyzing specimen photo with AI...');
+      const enrichedResult = await scanSpecimenImage(imageDataUrl, mode.toLowerCase(), testCaseIdToRun);
 
       setScanStep('Finding more photos and information...');
       await new Promise((r) => setTimeout(r, 300));
@@ -226,7 +244,7 @@ export const ScannerPage: React.FC = () => {
         err?.message ||
           'Analysis interrupted. The organism could not be clearly resolved. Please check camera focus, lighting, and retry.'
       );
-      showToast('Scan could not complete. Check error guidance.');
+      showToast(err?.message || 'Scan could not complete. Check error guidance.');
     } finally {
       setIsScanning(false);
       // Requirement: 15-second cooldown on the scan button after each scan

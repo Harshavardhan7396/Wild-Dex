@@ -3,6 +3,7 @@ import {
   SCANNER_TEST_CASES,
   ScannerTestCase,
 } from '../config/scannerPrompt';
+import { supabase } from '../lib/supabase';
 import { Species } from '../types/species';
 import { CURATED_SPECIES, saveSpeciesToCache } from './speciesService';
 
@@ -329,87 +330,136 @@ export async function enrichScanResult(
   };
 }
 
+function normalizeCategory(cat?: string): SpecimenScanResult['category'] {
+  const c = (cat || '').toLowerCase().trim();
+  if (c.includes('mammal') || c.includes('animal')) return 'mammals';
+  if (c.includes('bird')) return 'birds';
+  if (c.includes('reptil')) return 'reptiles';
+  if (c.includes('amphib')) return 'amphibians';
+  if (c.includes('insect') || c.includes('bug') || c.includes('arthropod')) return 'insects';
+  if (c.includes('marin') || c.includes('fish')) return 'marine';
+  if (c.includes('plant') || c.includes('flora') || c.includes('tree') || c.includes('flower') || c.includes('botan')) return 'plants';
+  if (c.includes('fung') || c.includes('mushroom') || c.includes('lichen')) return 'fungi';
+  return 'other';
+}
+
 /**
- * Send specimen image to Gemini Scanner API with single request execution (no automatic retry)
+ * Send specimen image to Supabase Edge Function 'scan' with single request execution
  */
 export async function scanSpecimenImage(
   imageDataUrl: string,
+  categoryOrTestCaseId = 'all',
   testCaseId?: string
 ): Promise<EnrichedSpecimenScanResult> {
+  // If running predefined test case offline
+  let selectedTestCase = testCaseId;
+  let category = categoryOrTestCaseId || 'all';
+  if (categoryOrTestCaseId?.startsWith('test-case-')) {
+    selectedTestCase = categoryOrTestCaseId;
+    category = 'all';
+  }
+
   // Compress to max 1024px width/height and format as JPEG
   const compressedDataUrl = await compressImage(imageDataUrl, 1024);
 
-  // If running predefined test case offline
-  if (testCaseId) {
-    const match = SCANNER_TEST_CASES.find((tc) => tc.id === testCaseId);
+  if (selectedTestCase) {
+    const match = SCANNER_TEST_CASES.find((tc) => tc.id === selectedTestCase);
     if (match) {
       return await enrichScanResult(match.expectedOutput, compressedDataUrl);
     }
   }
 
-  // Exactly one request sent per scan - no automatic retry on rate limits or errors
+  // Requirement 4: If the user is not signed in, show "Please sign in to scan"
   try {
-    const response = await fetch('/api/scan', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        imageBase64: compressedDataUrl,
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      throw new Error('Please sign in to scan');
+    }
+  } catch (authErr: any) {
+    if (authErr?.message === 'Please sign in to scan') throw authErr;
+    throw new Error('Please sign in to scan');
+  }
+
+  // Extract pure base64 string
+  const imageBase64 = compressedDataUrl.includes(',')
+    ? compressedDataUrl.split(',')[1]
+    : compressedDataUrl;
+
+  // Requirement 1 & 3: Send exactly one request per scan to supabase.functions.invoke('scan')
+  try {
+    const { data, error } = await supabase.functions.invoke('scan', {
+      body: {
+        imageBase64,
         mimeType: 'image/jpeg',
-        testCaseId,
-      }),
+        category,
+      },
     });
 
-    const responseText = await response.text();
-    let payload: any = null;
-    try {
-      payload = JSON.parse(responseText);
-    } catch {
-      console.warn('Response from /api/scan was not JSON:', responseText.slice(0, 200));
-    }
+    // Requirement 3: If the response has an error field, show that message
+    if (error || data?.error) {
+      let rawMsg = data?.error || data?.message || error?.message || 'Unable to identify specimen.';
+      if (typeof rawMsg !== 'string') {
+        try {
+          rawMsg = JSON.stringify(rawMsg);
+        } catch {
+          rawMsg = 'Unable to identify specimen.';
+        }
+      }
 
-    const isHtmlResponse =
-      !payload &&
-      (responseText.includes('<!doctype') ||
-        responseText.includes('<html') ||
-        responseText.includes('Starting Server') ||
-        responseText.includes('warmup'));
-
-    if (!response.ok || !payload || !payload.success) {
-      const rawServerMessage =
-        payload?.error ||
-        payload?.message ||
-        (isHtmlResponse
-          ? 'The AI scanner is temporarily busy or starting up. Please try again in a moment.'
-          : `Server returned status ${response.status}: ${response.statusText}`);
-
-      // Log the full error to the console
-      console.error('Gemini Scanner Server Error:', {
-        status: response.status,
-        statusText: response.statusText,
-        payload,
-        rawMessage: rawServerMessage,
-        isHtmlResponse,
+      console.error('Supabase Edge Function Scanner Error:', {
+        error,
+        data,
+        rawMsg,
       });
 
-      const friendlyMessage = formatScannerErrorMessage(rawServerMessage, response.status);
-      const errorObj = new Error(friendlyMessage);
-      (errorObj as any).status = response.status;
-      (errorObj as any).rawServerMessage = rawServerMessage;
-
-      throw errorObj;
+      const friendlyMsg = formatScannerErrorMessage(rawMsg);
+      const errObj = new Error(friendlyMsg);
+      (errObj as any).rawServerMessage = rawMsg;
+      throw errObj;
     }
 
-    if (payload && payload.success && payload.data) {
-      const rawResult = payload.data as SpecimenScanResult;
-      // Enrich with real iNaturalist & Wikipedia photos
-      const enriched = await enrichScanResult(rawResult, compressedDataUrl);
-      return enriched;
+    const payload = data?.data || data;
+    if (!payload || (!payload.commonName && !payload.scientificName)) {
+      throw new Error('No taxonomic identification returned from scan function. Please try another photo.');
     }
 
-    const errMessage = payload?.error || 'Unable to identify specimen. Please try another photo.';
-    throw new Error(formatScannerErrorMessage(errMessage));
+    // Requirement 2: Map commonName, scientificName, category, confidence (0 to 1), alternateMatches, safetyFlags and quickFacts
+    const mappedResult: SpecimenScanResult = {
+      commonName: payload.commonName || 'Unknown Organism',
+      scientificName: payload.scientificName || 'Indeterminate sp.',
+      category: normalizeCategory(payload.category),
+      confidence: typeof payload.confidence === 'number' ? Math.max(0, Math.min(1, payload.confidence)) : 0.85,
+      notASpecies: Boolean(
+        payload.notASpecies ||
+        payload.confidence === 0 ||
+        payload.commonName?.toLowerCase().includes('not a living')
+      ),
+      taxonomicRank: payload.taxonomicRank || (payload.scientificName?.includes(' sp.') ? 'genus' : 'species'),
+      reasoning: payload.reasoning || `Morphological traits analyzed with ${(((payload.confidence ?? 0.85)) * 100).toFixed(0)}% confidence score.`,
+      safetyFlags: {
+        venomous: Boolean(payload.safetyFlags?.venomous),
+        toxic: Boolean(payload.safetyFlags?.toxic),
+        endangered: Boolean(payload.safetyFlags?.endangered),
+        invasive: Boolean(payload.safetyFlags?.invasive),
+        harmless: Boolean(payload.safetyFlags?.harmless ?? (!payload.safetyFlags?.venomous && !payload.safetyFlags?.toxic)),
+      },
+      top3AlternateMatches: (payload.alternateMatches || payload.top3AlternateMatches || []).map((m: any) => ({
+        commonName: m.commonName || m.name || '',
+        scientificName: m.scientificName || '',
+        confidence: typeof m.confidence === 'number' ? m.confidence : 0,
+        distinctionReason: m.distinctionReason || m.reason || 'Candidate alternate species.',
+      })),
+      quickFacts: {
+        habitat: payload.quickFacts?.habitat || 'Diverse natural habitats',
+        diet: payload.quickFacts?.diet || 'Omnivorous / Herbivorous / Carnivorous',
+        lifespan: payload.quickFacts?.lifespan || 'Varies by environmental factors',
+        size: payload.quickFacts?.size || 'Standard adult morphological range',
+      },
+    };
+
+    // Enrich with real iNaturalist & Wikipedia photos
+    const enriched = await enrichScanResult(mappedResult, compressedDataUrl);
+    return enriched;
   } catch (err: any) {
     console.error('Specimen scan failed:', err);
     throw err;
