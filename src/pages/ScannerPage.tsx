@@ -219,7 +219,7 @@ export const ScannerPage: React.FC = () => {
         }
       }
 
-      setScanStep('Compressing image to 1024px maximum...');
+      setScanStep('Compressing photo to 768px maximum...');
       await new Promise((r) => setTimeout(r, 200));
 
       setScanStep('Analyzing specimen photo with AI...');
@@ -306,8 +306,8 @@ export const ScannerPage: React.FC = () => {
       reader.onload = async () => {
         const rawUrl = reader.result as string;
         try {
-          // Resize and compress uploaded image to a maximum of 1024px JPEG before sending
-          const compressed = await compressImage(rawUrl, 1024);
+          // Resize and compress uploaded image to a maximum of 768px JPEG at quality 0.7 before sending
+          const compressed = await compressImage(rawUrl, 768, 0.7);
           setCapturedImage(compressed);
           await performIdentification(compressed);
         } catch {

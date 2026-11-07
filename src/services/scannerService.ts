@@ -18,9 +18,13 @@ export interface EnrichedSpecimenScanResult extends SpecimenScanResult {
 }
 
 /**
- * Compresses an image file or DataURL to maximum 1024px width/height and JPEG format before network transfer
+ * Compresses an image file or DataURL to maximum 768px on the longest side and JPEG format at quality 0.7
  */
-export async function compressImage(dataUrl: string, maxDimension = 1024): Promise<string> {
+export async function compressImage(
+  dataUrl: string,
+  maxDimension = 768,
+  quality = 0.7
+): Promise<string> {
   if (!dataUrl) return dataUrl;
 
   return new Promise((resolve) => {
@@ -46,7 +50,7 @@ export async function compressImage(dataUrl: string, maxDimension = 1024): Promi
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', 0.85));
+        resolve(canvas.toDataURL('image/jpeg', quality));
       } else {
         resolve(dataUrl);
       }
@@ -119,6 +123,11 @@ export function formatScannerErrorMessage(errorMsg: string, status?: number): st
   // 5. Network errors
   if (lower.includes('network') || lower.includes('failed to fetch')) {
     return 'Network connection issue. Please check your internet connection and retry.';
+  }
+
+  // 5b. Timeout errors
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('abort')) {
+    return 'The scan request timed out. Please try again.';
   }
 
   // 6. Generic server error / non-2xx status code
@@ -365,8 +374,8 @@ export async function scanSpecimenImage(
     category = 'all';
   }
 
-  // Compress to max 1024px width/height and format as JPEG
-  const compressedDataUrl = await compressImage(imageDataUrl, 1024);
+  // Resize the photo to a maximum of 768px on the longest side and compress it as JPEG at quality 0.7
+  const compressedDataUrl = await compressImage(imageDataUrl, 768, 0.7);
 
   if (selectedTestCase) {
     const match = SCANNER_TEST_CASES.find((tc) => tc.id === selectedTestCase);
@@ -375,7 +384,7 @@ export async function scanSpecimenImage(
     }
   }
 
-  // Requirement 4: If the user is not signed in, show "Please sign in to scan"
+  // Requirement: If the user is not signed in, show "Please sign in to scan"
   try {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -391,15 +400,27 @@ export async function scanSpecimenImage(
     ? compressedDataUrl.split(',')[1]
     : compressedDataUrl;
 
-  // Requirement 1 & 3: Send exactly one request per scan to supabase.functions.invoke('scan')
+  // Send request to supabase.functions.invoke('scan') with 45-second timeout
   try {
-    const { data, error } = await supabase.functions.invoke('scan', {
-      body: {
-        imageBase64,
-        mimeType: 'image/jpeg',
-        category,
-      },
-    });
+    const abortController = new AbortController();
+    const timeoutTimer = setTimeout(() => abortController.abort(), 45000);
+
+    let invokeResult: any;
+    try {
+      invokeResult = await supabase.functions.invoke('scan', {
+        body: {
+          imageBase64,
+          mimeType: 'image/jpeg',
+          category,
+        },
+        timeout: 45000,
+        signal: abortController.signal,
+      });
+    } finally {
+      clearTimeout(timeoutTimer);
+    }
+
+    const { data, error } = invokeResult;
 
     // Check for Edge Function errors or non-2xx status
     if (error || data?.error) {
