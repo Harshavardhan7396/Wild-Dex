@@ -194,24 +194,6 @@ export const ScannerPage: React.FC = () => {
   const performIdentification = async (imageDataUrl: string, testCaseIdToRun?: string) => {
     if (isScanning || cooldownSeconds > 0) return;
 
-    // Requirement 4: If the user is not signed in, show "Please sign in to scan"
-    if (!testCaseIdToRun) {
-      try {
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-          setScanError('Please sign in to scan');
-          showToast('Please sign in to scan');
-          setAuthModalOpen(true);
-          return;
-        }
-      } catch {
-        setScanError('Please sign in to scan');
-        showToast('Please sign in to scan');
-        setAuthModalOpen(true);
-        return;
-      }
-    }
-
     setIsScanning(true);
     setScanError(null);
     setRetryImagePayload(imageDataUrl);
@@ -219,6 +201,24 @@ export const ScannerPage: React.FC = () => {
     setSelectedPhotoIndex(0);
 
     try {
+      // If the user is not signed in, show "Please sign in to scan"
+      if (!testCaseIdToRun) {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) {
+            setScanError('Please sign in to scan');
+            showToast('Please sign in to scan');
+            setAuthModalOpen(true);
+            return;
+          }
+        } catch {
+          setScanError('Please sign in to scan');
+          showToast('Please sign in to scan');
+          setAuthModalOpen(true);
+          return;
+        }
+      }
+
       setScanStep('Compressing image to 1024px maximum...');
       await new Promise((r) => setTimeout(r, 200));
 
@@ -246,6 +246,7 @@ export const ScannerPage: React.FC = () => {
       );
       showToast(err?.message || 'Scan could not complete. Check error guidance.');
     } finally {
+      // Always clear the loading state in a finally block
       setIsScanning(false);
       // Requirement: 15-second cooldown on the scan button after each scan
       setCooldownSeconds(15);
@@ -382,102 +383,98 @@ export const ScannerPage: React.FC = () => {
     setIsSavingToDex(true);
     setSaveError(null);
 
-    // Requirement 3: Do the steps in this order, and wrap each in its own try/catch that shows the exact Supabase error message on screen and logs it to the console:
-
-    // (a) compress the image to 1024px JPEG
-    let jpegBlob: Blob;
     try {
-      const sourceImage =
-        capturedImage ||
-        (scanResult.enrichedPhotos && scanResult.enrichedPhotos[0]) ||
-        'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz';
+      // (a) compress the image to 1024px JPEG
+      let jpegBlob: Blob;
+      try {
+        const sourceImage =
+          capturedImage ||
+          (scanResult.enrichedPhotos && scanResult.enrichedPhotos[0]) ||
+          'https://lh3.googleusercontent.com/aida-public/AB6AXuDTp4wz_G-5zP2-JqUf7VbLzK1E9B12sQ3_X6t8M9nO0pQrStUvWxYz';
 
-      jpegBlob = await compressImageToJpegBlob(sourceImage, 1024);
-    } catch (compressErr: any) {
-      const errMsg = compressErr?.message || 'Failed to compress image to 1024px JPEG.';
-      console.error('[Compression Error]:', compressErr);
-      setSaveError(errMsg);
-      showToast(errMsg);
-      setIsSavingToDex(false);
-      return;
-    }
-
-    // (b) upload to the "scans" bucket at {user_id}/{timestamp}.jpg
-    const timestamp = Date.now();
-    const photoPath = `${user.id}/${timestamp}.jpg`;
-    try {
-      const { error: uploadError } = await supabase.storage
-        .from('scans')
-        .upload(photoPath, jpegBlob, {
-          contentType: 'image/jpeg',
-          upsert: true,
-        });
-
-      if (uploadError) {
-        console.error('[Supabase Storage Error]:', uploadError);
-        const errMsg = uploadError.message || 'Failed to upload photo to scans bucket.';
+        jpegBlob = await compressImageToJpegBlob(sourceImage, 1024);
+      } catch (compressErr: any) {
+        const errMsg = compressErr?.message || 'Failed to compress image to 1024px JPEG.';
+        console.error('[Compression Error]:', compressErr);
         setSaveError(errMsg);
         showToast(errMsg);
-        setIsSavingToDex(false);
         return;
       }
-    } catch (storageException: any) {
-      console.error('[Supabase Storage Exception]:', storageException);
-      const errMsg = storageException?.message || 'Storage upload exception.';
-      setSaveError(errMsg);
-      showToast(errMsg);
-      setIsSavingToDex(false);
-      return;
-    }
 
-    // (c) insert into collection_items with owner_id = user.id
-    try {
-      const rarity = deriveRarityTier(scanResult.conservationStatusCode);
-      const dbRow = {
-        owner_id: user.id,
-        album_id: selectedAlbumId && selectedAlbumId !== 'default' && selectedAlbumId !== 'all' ? selectedAlbumId : null,
-        species_name: scanResult.commonName,
-        scientific_name: scanResult.scientificName,
-        category: scanResult.category || 'other',
-        confidence: scanResult.confidence || 0.95,
-        rarity: rarity,
-        photo_path: photoPath,
-        lat: null,
-        lng: null,
-        created_at: new Date().toISOString(),
-      };
+      // (b) upload to the "scans" bucket at {user_id}/{timestamp}.jpg
+      const timestamp = Date.now();
+      const photoPath = `${user.id}/${timestamp}.jpg`;
+      try {
+        const { error: uploadError } = await supabase.storage
+          .from('scans')
+          .upload(photoPath, jpegBlob, {
+            contentType: 'image/jpeg',
+            upsert: true,
+          });
 
-      const { error: insertError } = await supabase
-        .from('collection_items')
-        .insert([dbRow]);
-
-      if (insertError) {
-        console.error('[Supabase Database Insert Error]:', insertError);
-        const errMsg = insertError.message || 'Failed to insert row into collection_items.';
+        if (uploadError) {
+          console.error('[Supabase Storage Error]:', uploadError);
+          const errMsg = uploadError.message || 'Failed to upload photo to scans bucket.';
+          setSaveError(errMsg);
+          showToast(errMsg);
+          return;
+        }
+      } catch (storageException: any) {
+        console.error('[Supabase Storage Exception]:', storageException);
+        const errMsg = storageException?.message || 'Storage upload exception.';
         setSaveError(errMsg);
         showToast(errMsg);
-        setIsSavingToDex(false);
         return;
       }
-    } catch (insertException: any) {
-      console.error('[Supabase Database Exception]:', insertException);
-      const errMsg = insertException?.message || 'Database insert exception.';
-      setSaveError(errMsg);
-      showToast(errMsg);
+
+      // (c) insert into collection_items with owner_id = user.id
+      try {
+        const rarity = deriveRarityTier(scanResult.conservationStatusCode);
+        const dbRow = {
+          owner_id: user.id,
+          album_id: selectedAlbumId && selectedAlbumId !== 'default' && selectedAlbumId !== 'all' ? selectedAlbumId : null,
+          species_name: scanResult.commonName,
+          scientific_name: scanResult.scientificName,
+          category: scanResult.category || 'other',
+          confidence: scanResult.confidence || 0.95,
+          rarity: rarity,
+          photo_path: photoPath,
+          lat: null,
+          lng: null,
+          created_at: new Date().toISOString(),
+        };
+
+        const { error: insertError } = await supabase
+          .from('collection_items')
+          .insert([dbRow]);
+
+        if (insertError) {
+          console.error('[Supabase Database Insert Error]:', insertError);
+          const errMsg = insertError.message || 'Failed to insert row into collection_items.';
+          setSaveError(errMsg);
+          showToast(errMsg);
+          return;
+        }
+      } catch (insertException: any) {
+        console.error('[Supabase Database Exception]:', insertException);
+        const errMsg = insertException?.message || 'Database insert exception.';
+        setSaveError(errMsg);
+        showToast(errMsg);
+        return;
+      }
+
+      // Requirement 4: Show "Saved to My Collection" only after the insert succeeds. On any failure, show the error with a Retry button.
+      setIsSavedInDex(true);
+      setSaveError(null);
+      setShowSaveModal(false);
+      showToast('Saved to My Collection');
+
+      // Refresh collection list without needing a page reload
+      window.dispatchEvent(new CustomEvent('wilddex:collection_updated'));
+      window.dispatchEvent(new CustomEvent('wilddex:item_saved'));
+    } finally {
       setIsSavingToDex(false);
-      return;
     }
-
-    // Requirement 4: Show "Saved to My Collection" only after the insert succeeds. On any failure, show the error with a Retry button.
-    setIsSavingToDex(false);
-    setIsSavedInDex(true);
-    setSaveError(null);
-    setShowSaveModal(false);
-    showToast('Saved to My Collection');
-
-    // Refresh collection list without needing a page reload
-    window.dispatchEvent(new CustomEvent('wilddex:collection_updated'));
-    window.dispatchEvent(new CustomEvent('wilddex:item_saved'));
   };
 
   const handleConfirmSaveToFirebase = handleAddToCollection;

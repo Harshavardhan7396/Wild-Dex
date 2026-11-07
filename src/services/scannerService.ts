@@ -121,8 +121,14 @@ export function formatScannerErrorMessage(errorMsg: string, status?: number): st
     return 'Network connection issue. Please check your internet connection and retry.';
   }
 
-  // 6. Generic server error
-  if (lower.includes('500') || lower.includes('internal server error')) {
+  // 6. Generic server error / non-2xx status code
+  if (
+    status === 500 ||
+    lower.includes('500') ||
+    lower.includes('internal server error') ||
+    lower.includes('non-2xx') ||
+    lower.includes('edge function')
+  ) {
     return 'The scan server encountered an issue. Please try again in a moment.';
   }
 
@@ -395,9 +401,57 @@ export async function scanSpecimenImage(
       },
     });
 
-    // Requirement 3: If the response has an error field, show that message
+    // Check for Edge Function errors or non-2xx status
     if (error || data?.error) {
-      let rawMsg = data?.error || data?.message || error?.message || 'Unable to identify specimen.';
+      let fullResponse: any = null;
+      const statusCode: number | undefined = error?.context?.status;
+
+      // 1. Read the real message from error.context.json() (fall back to error.context.text())
+      if (error?.context) {
+        try {
+          fullResponse = await error.context.json();
+        } catch {
+          try {
+            fullResponse = await error.context.text();
+          } catch (readErr) {
+            console.warn('Could not read error.context text:', readErr);
+          }
+        }
+      } else if (data) {
+        fullResponse = data;
+      }
+
+      // 2. Log the status code and full response to the console
+      console.error('Status code:', statusCode);
+      console.error('Full response:', fullResponse);
+      console.error('Supabase Edge Function Scanner Error:', {
+        statusCode,
+        fullResponse,
+        error,
+        data,
+      });
+
+      // Extract the "error" field from the response
+      let rawMsg = '';
+      if (fullResponse && typeof fullResponse === 'object') {
+        rawMsg = fullResponse.error || fullResponse.message || '';
+      } else if (typeof fullResponse === 'string') {
+        try {
+          const parsed = JSON.parse(fullResponse);
+          rawMsg = parsed.error || parsed.message || fullResponse;
+        } catch {
+          rawMsg = fullResponse;
+        }
+      }
+
+      if (!rawMsg && data?.error) {
+        rawMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+      }
+
+      if (!rawMsg) {
+        rawMsg = error?.message || 'Unable to identify specimen.';
+      }
+
       if (typeof rawMsg !== 'string') {
         try {
           rawMsg = JSON.stringify(rawMsg);
@@ -406,15 +460,12 @@ export async function scanSpecimenImage(
         }
       }
 
-      console.error('Supabase Edge Function Scanner Error:', {
-        error,
-        data,
-        rawMsg,
-      });
-
-      const friendlyMsg = formatScannerErrorMessage(rawMsg);
+      // Show in the error box in simple everyday words
+      const friendlyMsg = formatScannerErrorMessage(rawMsg, statusCode);
       const errObj = new Error(friendlyMsg);
       (errObj as any).rawServerMessage = rawMsg;
+      (errObj as any).statusCode = statusCode;
+      (errObj as any).fullResponse = fullResponse;
       throw errObj;
     }
 
@@ -461,6 +512,38 @@ export async function scanSpecimenImage(
     const enriched = await enrichScanResult(mappedResult, compressedDataUrl);
     return enriched;
   } catch (err: any) {
+    if (err?.context && !err.fullResponse) {
+      const statusCode = err.context.status;
+      let fullResponse: any = null;
+      try {
+        fullResponse = await err.context.json();
+      } catch {
+        try {
+          fullResponse = await err.context.text();
+        } catch {}
+      }
+      console.error('Status code:', statusCode);
+      console.error('Full response:', fullResponse);
+
+      let rawMsg = '';
+      if (fullResponse && typeof fullResponse === 'object') {
+        rawMsg = fullResponse.error || fullResponse.message || '';
+      } else if (typeof fullResponse === 'string') {
+        try {
+          const parsed = JSON.parse(fullResponse);
+          rawMsg = parsed.error || parsed.message || fullResponse;
+        } catch {
+          rawMsg = fullResponse;
+        }
+      }
+      if (!rawMsg) rawMsg = err.message || 'Unable to identify specimen.';
+      const friendlyMsg = formatScannerErrorMessage(rawMsg, statusCode);
+      const formattedErr = new Error(friendlyMsg);
+      (formattedErr as any).statusCode = statusCode;
+      (formattedErr as any).fullResponse = fullResponse;
+      (formattedErr as any).rawServerMessage = rawMsg;
+      throw formattedErr;
+    }
     console.error('Specimen scan failed:', err);
     throw err;
   }
