@@ -117,7 +117,7 @@ export const ProfilePage: React.FC = () => {
   ];
 
   return (
-    <div className="flex flex-col w-full px-margin pb-12 pt-2 space-y-space-md">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-12 pt-2 space-y-space-md">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -127,9 +127,9 @@ export const ProfilePage: React.FC = () => {
       )}
 
       {/* Top Controls */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-headline-sm text-headline-sm text-primary font-bold">Naturalist Profile</span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {currentUser && (
             <button
               onClick={() => {
@@ -169,8 +169,8 @@ export const ProfilePage: React.FC = () => {
         />
       ) : (
         /* Profile Bio Card */
-        <div className="p-space-md rounded-3xl bg-surface-container-high shadow-sm flex flex-col gap-3 border border-outline-variant/20">
-          <div className="flex items-center gap-4">
+        <div className="p-3 sm:p-space-md rounded-3xl bg-surface-container-high shadow-sm flex flex-col gap-3 border border-outline-variant/20">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
             <div className="relative shrink-0">
               {(userProfile?.photoURL || currentUser.photoURL) ? (
                 <img
@@ -196,7 +196,7 @@ export const ProfilePage: React.FC = () => {
               <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
                 {userProfile?.location || 'Field Observer'} • {currentUser.email || userProfile?.email}
               </p>
-              <div className="flex items-center gap-2 mt-1">
+              <div className="flex flex-wrap items-center gap-2 mt-1">
                 <span className="px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-bold capitalize">
                   {userProfile?.experienceLevel || 'Enthusiast'} Level
                 </span>
@@ -212,7 +212,7 @@ export const ProfilePage: React.FC = () => {
           </p>
 
           {/* Stats Row */}
-          <div className="grid grid-cols-4 gap-2 pt-2 border-t border-outline-variant/30 text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-outline-variant/30 text-center">
             <div className="p-2 rounded-2xl bg-surface-container-lowest">
               <span className="font-headline-sm text-headline-sm text-primary font-bold">
                 {totalLogged}
@@ -242,36 +242,36 @@ export const ProfilePage: React.FC = () => {
       )}
 
       {/* Quick Navigation Hub */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <Link
           to="/leaderboard"
           className="p-3 rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
         >
-          <div className="flex items-center gap-2.5">
-            <span className="material-symbols-outlined text-secondary text-[22px]">leaderboard</span>
-            <span className="font-label-md text-label-md font-bold text-on-surface">Leaderboard</span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="material-symbols-outlined text-secondary text-[22px] shrink-0">leaderboard</span>
+            <span className="font-label-md text-label-md font-bold text-on-surface truncate">Leaderboard</span>
           </div>
-          <span className="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
+          <span className="material-symbols-outlined text-outline text-[18px] shrink-0">chevron_right</span>
         </Link>
         <Link
           to="/collection"
           className="p-3 rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
         >
-          <div className="flex items-center gap-2.5">
-            <span className="material-symbols-outlined text-primary text-[22px]">collections_bookmark</span>
-            <span className="font-label-md text-label-md font-bold text-on-surface">My Collection</span>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="material-symbols-outlined text-primary text-[22px] shrink-0">collections_bookmark</span>
+            <span className="font-label-md text-label-md font-bold text-on-surface truncate">My Collection</span>
           </div>
-          <span className="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
+          <span className="material-symbols-outlined text-outline text-[18px] shrink-0">chevron_right</span>
         </Link>
       </div>
 
       {/* Segmented Detail Tabs */}
-      <div className="flex bg-surface-container-low p-1 rounded-full">
+      <div className="flex flex-wrap sm:flex-nowrap bg-surface-container-low p-1 rounded-2xl sm:rounded-full gap-1">
         {(['sightings', 'badges', 'taxonomy'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-1.5 rounded-full font-label-md text-label-md capitalize transition-all ${
+            className={`flex-1 min-w-[90px] py-1.5 px-2 rounded-full font-label-md text-label-md capitalize transition-all ${
               activeTab === tab
                 ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                 : 'text-on-surface-variant'
@@ -287,7 +287,7 @@ export const ProfilePage: React.FC = () => {
       {activeTab === 'sightings' && (
         <div className="flex flex-col gap-2">
           {userSpecimens.length > 0 ? (
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {userSpecimens.slice(0, 6).map((item) => (
                 <div
                   key={item.id}
@@ -322,7 +322,7 @@ export const ProfilePage: React.FC = () => {
 
       {/* Tab 2: Badges */}
       {activeTab === 'badges' && (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {badges.map((b, i) => (
             <div
               key={i}
@@ -356,8 +356,8 @@ export const ProfilePage: React.FC = () => {
 
       {/* Tab 3: Family Tree Coverage */}
       {activeTab === 'taxonomy' && (
-        <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
-          <div className="flex items-center justify-between">
+        <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="font-headline-sm text-headline-sm text-on-surface">Family Tree Distribution</h3>
             <span className="font-label-sm text-label-sm text-secondary font-semibold">
               {totalLogged} Recorded Specimen(s)

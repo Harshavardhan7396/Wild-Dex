@@ -31,7 +31,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full px-margin pb-12 pt-2 space-y-space-md">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-12 pt-2 space-y-space-md">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -54,35 +54,35 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       {/* Appearance Section */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
         <h2 className="font-headline-sm text-headline-sm text-on-surface">Appearance & Language</h2>
 
         {/* Dark Mode */}
-        <div className="flex items-center justify-between py-1">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-primary">
+        <div className="flex items-center justify-between gap-3 py-1">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-primary shrink-0">
               <span className="material-symbols-outlined text-[20px]">dark_mode</span>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-semibold text-on-surface">Dark Mode</p>
               <p className="font-body-sm text-body-sm text-on-surface-variant">Optimal for nocturnal field observations</p>
             </div>
           </div>
           <button
             onClick={toggleDarkMode}
-            className={`w-12 h-7 rounded-full p-1 transition-colors ${darkMode ? 'bg-primary' : 'bg-surface-container-high'}`}
+            className={`w-12 h-7 rounded-full p-1 transition-colors shrink-0 ${darkMode ? 'bg-primary' : 'bg-surface-container-high'}`}
           >
             <div className={`w-5 h-5 rounded-full bg-white transition-transform ${darkMode ? 'translate-x-5' : 'translate-x-0'}`}></div>
           </button>
         </div>
 
         {/* Language */}
-        <div className="flex items-center justify-between py-1 border-t border-outline-variant/20 pt-2">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-primary">
+        <div className="flex items-center justify-between gap-3 py-1 border-t border-outline-variant/20 pt-2">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-primary shrink-0">
               <span className="material-symbols-outlined text-[20px]">translate</span>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-semibold text-on-surface">Science Names</p>
               <p className="font-body-sm text-body-sm text-on-surface-variant">Science names stay in Latin</p>
             </div>
@@ -93,7 +93,7 @@ export const SettingsPage: React.FC = () => {
               setLanguage(e.target.value);
               showToast(`Language switched to ${e.target.value}`);
             }}
-            className="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface font-label-sm text-label-sm font-semibold focus:outline-none"
+            className="px-3 py-1.5 rounded-xl bg-surface-container text-on-surface font-label-sm text-label-sm font-semibold focus:outline-none shrink-0"
           >
             <option>English</option>
             <option>Español</option>
@@ -105,16 +105,16 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       {/* Offline & Storage Management */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
         <h2 className="font-headline-sm text-headline-sm text-on-surface">Offline & Cache</h2>
 
         {/* Regional Pack */}
-        <div className="flex items-center justify-between py-1">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center">
+        <div className="flex items-center justify-between gap-3 py-1">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shrink-0">
               <span className="material-symbols-outlined text-[20px]">download_for_offline</span>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-semibold text-on-surface">Pacific Northwest Pack</p>
               <p className="font-body-sm text-body-sm text-on-surface-variant">120 MB • 3,200 species offline</p>
             </div>
@@ -124,7 +124,7 @@ export const SettingsPage: React.FC = () => {
               setOfflineDownloaded(!offlineDownloaded);
               showToast(offlineDownloaded ? 'Offline pack removed' : 'Downloaded PNW offline pack');
             }}
-            className={`px-3 py-1.5 rounded-full font-label-sm text-label-sm font-semibold transition-all ${
+            className={`px-3 py-1.5 rounded-full font-label-sm text-label-sm font-semibold transition-all shrink-0 ${
               offlineDownloaded ? 'bg-secondary text-on-secondary' : 'bg-surface-container-high text-on-surface'
             }`}
           >
@@ -133,19 +133,19 @@ export const SettingsPage: React.FC = () => {
         </div>
 
         {/* Clear Cache */}
-        <div className="flex items-center justify-between py-1 border-t border-outline-variant/20 pt-2">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant">
+        <div className="flex items-center justify-between gap-3 py-1 border-t border-outline-variant/20 pt-2">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
               <span className="material-symbols-outlined text-[20px]">cleaning_services</span>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-semibold text-on-surface">Temporary Image Cache</p>
               <p className="font-body-sm text-body-sm text-on-surface-variant">34.2 MB cached locally</p>
             </div>
           </div>
           <button
             onClick={() => showToast('Image cache cleared (34.2 MB freed)')}
-            className="px-3 py-1.5 rounded-full bg-surface-container-high hover:bg-surface-container text-on-surface font-label-sm text-label-sm font-semibold"
+            className="px-3 py-1.5 rounded-full bg-surface-container-high hover:bg-surface-container text-on-surface font-label-sm text-label-sm font-semibold shrink-0"
           >
             Clear
           </button>
@@ -153,16 +153,16 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       {/* Privacy & Safety Controls */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
         <h2 className="font-headline-sm text-headline-sm text-on-surface">Field Privacy & Safety</h2>
 
         {/* Fuzz Rare GPS */}
-        <div className="flex items-center justify-between py-1">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-tertiary-fixed text-on-tertiary-fixed flex items-center justify-center">
+        <div className="flex items-center justify-between gap-3 py-1">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-tertiary-fixed text-on-tertiary-fixed flex items-center justify-center shrink-0">
               <span className="material-symbols-outlined text-[20px]">shield</span>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-semibold text-on-surface">Protect Rare Species Locations</p>
               <p className="font-body-sm text-body-sm text-on-surface-variant">Hide exact spot for species in danger</p>
             </div>
@@ -172,19 +172,19 @@ export const SettingsPage: React.FC = () => {
               setObfuscateGps(!obfuscateGps);
               showToast(obfuscateGps ? 'Exact location sharing turned on' : 'Location hiding turned on for rare species');
             }}
-            className={`w-12 h-7 rounded-full p-1 transition-colors ${obfuscateGps ? 'bg-primary' : 'bg-surface-container-high'}`}
+            className={`w-12 h-7 rounded-full p-1 transition-colors shrink-0 ${obfuscateGps ? 'bg-primary' : 'bg-surface-container-high'}`}
           >
             <div className={`w-5 h-5 rounded-full bg-white transition-transform ${obfuscateGps ? 'translate-x-5' : 'translate-x-0'}`}></div>
           </button>
         </div>
 
         {/* Public Profile */}
-        <div className="flex items-center justify-between py-1 border-t border-outline-variant/20 pt-2">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant">
+        <div className="flex items-center justify-between gap-3 py-1 border-t border-outline-variant/20 pt-2">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
               <span className="material-symbols-outlined text-[20px]">visibility</span>
             </div>
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-semibold text-on-surface">Public Profile Visibility</p>
               <p className="font-body-sm text-body-sm text-on-surface-variant">Allow other naturalists to discover you</p>
             </div>
@@ -194,7 +194,7 @@ export const SettingsPage: React.FC = () => {
               setPublicProfile(!publicProfile);
               showToast(publicProfile ? 'Profile set to private' : 'Profile is now public');
             }}
-            className={`w-12 h-7 rounded-full p-1 transition-colors ${publicProfile ? 'bg-primary' : 'bg-surface-container-high'}`}
+            className={`w-12 h-7 rounded-full p-1 transition-colors shrink-0 ${publicProfile ? 'bg-primary' : 'bg-surface-container-high'}`}
           >
             <div className={`w-5 h-5 rounded-full bg-white transition-transform ${publicProfile ? 'translate-x-5' : 'translate-x-0'}`}></div>
           </button>
@@ -202,7 +202,7 @@ export const SettingsPage: React.FC = () => {
       </div>
 
       {/* Account & Data Management */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
         <h2 className="font-headline-sm text-headline-sm text-on-surface">Account & Data</h2>
 
         {/* Real Profile Card */}
@@ -212,7 +212,7 @@ export const SettingsPage: React.FC = () => {
           const avatarUrl = userProfile?.photoURL || currentUser?.photoURL;
 
           return (
-            <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-surface-container">
+            <div className="flex flex-wrap sm:flex-nowrap items-center gap-3.5 p-3 rounded-2xl bg-surface-container">
               {avatarUrl ? (
                 <img
                   src={avatarUrl}

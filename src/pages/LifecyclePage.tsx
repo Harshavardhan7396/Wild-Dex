@@ -99,7 +99,7 @@ export const LifecyclePage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full px-margin pb-10 space-y-space-lg">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-10 space-y-space-lg">
       {/* Toast */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -132,8 +132,8 @@ export const LifecyclePage: React.FC = () => {
       </div>
 
       {/* Interactive Stage Timeline Controller & Play Bar */}
-      <div className="flex flex-col bg-surface-container rounded-2xl p-space-md shadow-sm space-y-space-md">
-        <div className="flex items-center justify-between">
+      <div className="flex flex-col bg-surface-container rounded-2xl p-3 sm:p-space-md shadow-sm space-y-space-md">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="font-label-sm text-label-sm uppercase tracking-wider text-on-surface-variant font-semibold">
             Life Stage Sequence
           </span>
@@ -182,7 +182,7 @@ export const LifecyclePage: React.FC = () => {
 
         {/* Scrubber Slider */}
         <div className="space-y-1">
-          <div className="flex justify-between items-center text-on-surface-variant">
+          <div className="flex flex-wrap justify-between items-center gap-1 text-on-surface-variant">
             <span className="font-label-md text-label-md font-semibold text-primary">
               {activeStage.dayRange} • {activeStage.name}
             </span>
@@ -199,9 +199,9 @@ export const LifecyclePage: React.FC = () => {
         </div>
 
         {/* Media Controls */}
-        <div className="flex items-center justify-between pt-1 gap-space-sm">
+        <div className="flex flex-wrap sm:flex-nowrap items-center justify-between pt-1 gap-space-sm">
           <button
-            className="flex-1 h-11 rounded-full bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-2 shadow hover:bg-primary-container active:scale-95 transition-all"
+            className="flex-1 min-w-[160px] h-11 rounded-full bg-primary text-on-primary font-label-md text-label-md flex items-center justify-center gap-2 shadow hover:bg-primary-container active:scale-95 transition-all"
             onClick={() => setIsPlaying(!isPlaying)}
             type="button"
           >
@@ -230,7 +230,7 @@ export const LifecyclePage: React.FC = () => {
       </div>
 
       {/* Active Stage Spotlight Card */}
-      <div className="relative overflow-hidden bg-surface-container-low rounded-3xl shadow-md p-space-md flex flex-col space-y-space-md">
+      <div className="relative overflow-hidden bg-surface-container-low rounded-3xl shadow-md p-3 sm:p-space-md flex flex-col space-y-space-md">
         <div className="relative w-full h-64 rounded-2xl overflow-hidden shadow-inner bg-surface-container-highest">
           <img
             className="w-full h-full object-cover transition-opacity duration-300"
@@ -262,7 +262,7 @@ export const LifecyclePage: React.FC = () => {
         </div>
 
         {/* Micro-Environment Specs */}
-        <div className="flex items-center gap-2 overflow-x-auto py-1">
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-2 md:overflow-x-auto py-1">
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-surface-container text-on-surface shrink-0">
             <span className="material-symbols-outlined text-[18px] text-secondary">thermostat</span>
             <span className="font-label-sm text-label-sm">21°C – 26°C</span>
@@ -318,15 +318,15 @@ export const LifecyclePage: React.FC = () => {
 
       {/* All 4 Stages Comparison Grid */}
       <div className="flex flex-col space-y-space-md">
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-col min-w-0">
             <h3 className="font-headline-sm text-headline-sm text-on-surface">All Growth Steps</h3>
             <p className="font-body-sm text-body-sm text-on-surface-variant">How the butterfly changes from egg to adult</p>
           </div>
-          <span className="font-label-sm text-label-sm text-secondary font-semibold">4 Steps</span>
+          <span className="font-label-sm text-label-sm text-secondary font-semibold shrink-0">4 Steps</span>
         </div>
 
-        <div className="grid grid-cols-2 gap-space-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-sm">
           {STAGES.map((st, i) => (
             <div
               key={i}
@@ -353,17 +353,17 @@ export const LifecyclePage: React.FC = () => {
       </div>
 
       {/* Host Plant Symbiosis */}
-      <div className="bg-surface-container rounded-3xl p-space-md flex flex-col space-y-space-md">
+      <div className="bg-surface-container rounded-3xl p-3 sm:p-space-md flex flex-col space-y-space-md">
         <div className="flex items-center gap-2">
-          <div className="w-9 h-9 rounded-full bg-secondary/10 flex items-center justify-center text-secondary">
+          <div className="w-9 h-9 rounded-full bg-secondary/10 flex items-center justify-center text-secondary shrink-0">
             <span className="material-symbols-outlined text-[20px]">psychiatry</span>
           </div>
-          <div className="flex flex-col">
+          <div className="flex flex-col min-w-0">
             <h3 className="font-headline-sm text-headline-sm text-on-surface leading-tight">Favorite Plant</h3>
             <span className="font-label-sm text-label-sm text-on-surface-variant">Needs milkweed to grow</span>
           </div>
         </div>
-        <div className="flex gap-3 bg-surface-container-low p-3 rounded-2xl">
+        <div className="flex flex-col sm:flex-row gap-3 bg-surface-container-low p-3 rounded-2xl">
           <div className="w-16 h-16 rounded-xl overflow-hidden shrink-0 bg-surface-container-highest">
             <img
               alt="Milkweed"

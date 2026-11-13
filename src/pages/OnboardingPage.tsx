@@ -76,7 +76,7 @@ export const OnboardingPage: React.FC = () => {
   return (
     <div className="flex flex-col w-full pb-8">
       {/* Progress Stepper Segment */}
-      <div className="px-margin pt-3 pb-2 w-full">
+      <div className="px-3 sm:px-margin pt-3 pb-2 w-full">
         <div className="flex items-center justify-between mb-2">
           <span className="font-label-md text-label-md text-primary font-semibold tracking-wider uppercase">
             Field Onboarding
@@ -96,7 +96,7 @@ export const OnboardingPage: React.FC = () => {
       {currentStep <= 3 ? (
         <>
           {/* Main Slide Feature Visual Card */}
-          <div className="px-margin pt-2 pb-4">
+          <div className="px-3 sm:px-margin pt-2 pb-4">
             <div className="relative w-full rounded-xl bg-surface-container-low shadow-md overflow-hidden">
               <div className="relative w-full h-56 overflow-hidden">
                 <img className="w-full h-full object-cover" alt={current.title} src={current.img} />
@@ -115,17 +115,17 @@ export const OnboardingPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-space-md -mt-8 relative z-10">
-                <div className="bg-surface-container-lowest rounded-xl p-space-md shadow-sm">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className="material-symbols-outlined text-primary text-[20px]">cycle</span>
-                      <div>
+              <div className="p-3 sm:p-space-md -mt-8 relative z-10">
+                <div className="bg-surface-container-lowest rounded-xl p-3 sm:p-space-md shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="material-symbols-outlined text-primary text-[20px] shrink-0">cycle</span>
+                      <div className="min-w-0">
                         <p className="font-headline-sm text-headline-sm text-on-surface leading-tight">Monarch Butterfly</p>
                         <p className="font-body-sm text-body-sm text-on-surface-variant italic">Danaus plexippus</p>
                       </div>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold uppercase">
+                    <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold uppercase shrink-0">
                       Vulnerable (IUCN)
                     </span>
                   </div>
@@ -164,7 +164,7 @@ export const OnboardingPage: React.FC = () => {
                   </div>
 
                   {/* Food Web & Territory Preview Chips */}
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="flex items-center gap-2 p-2 rounded-lg bg-surface-container-low">
                       <span className="material-symbols-outlined text-primary text-[18px]">forest</span>
                       <div className="min-w-0">
@@ -186,7 +186,7 @@ export const OnboardingPage: React.FC = () => {
           </div>
 
           {/* Narrative Header & Description */}
-          <div className="px-margin py-2">
+          <div className="px-3 sm:px-margin py-2">
             <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-surface-container-high text-on-surface-variant font-label-md text-label-md mb-2">
               <span className="w-2 h-2 rounded-full bg-primary"></span>
               {current.tag}
@@ -200,14 +200,14 @@ export const OnboardingPage: React.FC = () => {
           </div>
 
           {/* Slide Carousel Thumbnails Selector */}
-          <div className="px-margin pt-4 pb-2">
+          <div className="px-3 sm:px-margin pt-4 pb-2">
             <div className="flex items-center justify-between mb-2">
               <span className="font-label-sm text-label-sm text-on-surface-variant uppercase font-semibold">
                 Walkthrough Modules
               </span>
               <span className="font-label-sm text-label-sm text-primary font-medium">Stage {currentStep}</span>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {steps.map((st) => (
                 <button
                   key={st.num}
@@ -234,7 +234,7 @@ export const OnboardingPage: React.FC = () => {
         </>
       ) : (
         /* Step 4: Explorer Identity & Profile Setup */
-        <div className="px-margin py-4 flex flex-col gap-5">
+        <div className="px-3 sm:px-margin py-4 flex flex-col gap-5">
           <div className="text-center max-w-md mx-auto">
             <div className="w-16 h-16 mx-auto rounded-2xl bg-primary-container text-on-primary flex items-center justify-center shadow-sm mb-3">
               <span className="material-symbols-outlined text-[32px]">badge</span>
@@ -248,7 +248,7 @@ export const OnboardingPage: React.FC = () => {
           </div>
 
           {/* Account Status */}
-          <div className="p-4 rounded-2xl bg-surface-container-high border border-outline-variant/30 flex items-center justify-between gap-3">
+          <div className="p-4 rounded-2xl bg-surface-container-high border border-outline-variant/30 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary">
                 <span className="material-symbols-outlined">person</span>
@@ -279,7 +279,7 @@ export const OnboardingPage: React.FC = () => {
             <label className="font-label-md text-sm font-bold text-on-surface">
               How Much Experience Do You Have?
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {[
                 { id: 'novice', label: 'Beginner', sub: 'Just starting out' },
                 { id: 'enthusiast', label: 'Explorer', sub: 'Frequent walker' },
@@ -307,7 +307,7 @@ export const OnboardingPage: React.FC = () => {
             <label className="font-label-md text-sm font-bold text-on-surface">
               What Do You Like to Find Most?
             </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {[
                 'Birds',
                 'Insects & Bugs',
@@ -338,7 +338,7 @@ export const OnboardingPage: React.FC = () => {
       )}
 
       {/* Bottom Interactive CTA Panel */}
-      <div className="px-margin pt-4 mt-auto">
+      <div className="px-3 sm:px-margin pt-4 mt-auto">
         <div className="flex items-center gap-3">
           <button
             aria-label="Previous slide"

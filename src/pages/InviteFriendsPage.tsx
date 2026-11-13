@@ -37,7 +37,7 @@ export const InviteFriendsPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full px-margin pb-12 pt-2 space-y-space-md">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-12 pt-2 space-y-space-md">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -60,7 +60,7 @@ export const InviteFriendsPage: React.FC = () => {
       </div>
 
       {/* Hero Invitation Banner */}
-      <div className="p-space-md rounded-2xl bg-surface-container-high shadow-sm flex flex-col items-center text-center gap-3">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-high shadow-sm flex flex-col items-center text-center gap-3">
         <div className="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center text-on-secondary-container shadow-sm">
           <span className="material-symbols-outlined text-[32px]">group_add</span>
         </div>
@@ -75,7 +75,7 @@ export const InviteFriendsPage: React.FC = () => {
       </div>
 
       {/* Tactile QR Code Card */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col items-center gap-4">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col items-center gap-4">
         <div className="p-4 rounded-2xl bg-white shadow-inner flex flex-col items-center justify-center">
           {/* Simulated QR Code with SVG */}
           <svg className="w-44 h-44 text-primary" viewBox="0 0 100 100" fill="currentColor">
@@ -110,12 +110,12 @@ export const InviteFriendsPage: React.FC = () => {
         </div>
 
         {/* Link Box */}
-        <div className="w-full flex items-center gap-2 p-2 rounded-xl bg-surface-container">
+        <div className="w-full flex items-center gap-2 p-2 rounded-xl bg-surface-container min-w-0">
           <input
             type="text"
             readOnly
             value={inviteLink}
-            className="flex-1 bg-transparent px-2 font-body-sm text-body-sm text-on-surface-variant truncate focus:outline-none"
+            className="flex-1 min-w-0 w-full bg-transparent px-2 font-body-sm text-body-sm text-on-surface-variant truncate focus:outline-none"
           />
           <button
             onClick={handleCopyLink}
@@ -140,13 +140,13 @@ export const InviteFriendsPage: React.FC = () => {
       </div>
 
       {/* Referral Milestone Rewards */}
-      <div className="p-space-md rounded-2xl bg-tertiary-container/15 text-tertiary flex flex-col gap-2">
-        <div className="flex items-center justify-between">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-tertiary-container/15 text-tertiary flex flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 font-label-md text-label-md font-bold">
             <span className="material-symbols-outlined text-[20px]">military_tech</span>
             <span>Squad Bonus Progress</span>
           </div>
-          <span className="font-label-sm text-label-sm bg-tertiary text-on-tertiary px-2 py-0.5 rounded-full font-bold">
+          <span className="font-label-sm text-label-sm bg-tertiary text-on-tertiary px-2 py-0.5 rounded-full font-bold shrink-0">
             2 / 3 Naturalists
           </span>
         </div>
@@ -156,36 +156,36 @@ export const InviteFriendsPage: React.FC = () => {
       </div>
 
       {/* Friends Already Joined */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
         <h3 className="font-headline-sm text-headline-sm text-on-surface">Your Joined Circle (2)</h3>
-        <div className="flex items-center justify-between py-1 border-b border-outline-variant/20">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-outline-variant/20">
+          <div className="flex items-center gap-2.5 min-w-0">
             <img
               alt="Leo Brooks"
-              className="w-10 h-10 rounded-full object-cover"
+              className="w-10 h-10 rounded-full object-cover shrink-0"
               src="https://lh3.googleusercontent.com/aida-public/AB6AXuCfi7ATaUUUMifGW_IBBdgTUVooFWb95RGI7l4XwiKguIterMV-rtNjviJ-2jTCxFc41waHiBzUYwRUxWDfAkusYhd54S54kY096pBhPEEYsTlKIoX4K50UlIIz5Re_XGg2N7VNyIpuKtGzkjGVIJS9fpGqhU4OcxWt93k16vvxPcIGSBJAOEwH14VJG4t9hVtCoJaB5szhu4LKrQSEwUHPDEGLUufZjSGUc2FMK07IkCkfNenCMKBuvQ"
             />
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-bold text-on-surface">Leo Brooks</p>
               <p className="font-body-sm text-[11px] text-on-surface-variant">Joined via QR • 42 species logged</p>
             </div>
           </div>
-          <span className="font-label-sm text-[11px] text-secondary font-bold">Active now</span>
+          <span className="font-label-sm text-[11px] text-secondary font-bold shrink-0">Active now</span>
         </div>
 
-        <div className="flex items-center justify-between py-1">
-          <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 py-1">
+          <div className="flex items-center gap-2.5 min-w-0">
             <img
               alt="Dr. Aris"
-              className="w-10 h-10 rounded-full object-cover"
+              className="w-10 h-10 rounded-full object-cover shrink-0"
               src="https://lh3.googleusercontent.com/aida-public/AB6AXuDcBNCRwdxnRGutog3iWlzAlwo2Jv2I-i6Du7jPoDoBLomRiuiFZ0Umxl9SIIPLFBgTDbochoQpFNAlHlzhQMFbxcdIflya5r1nrOzhzYLREmb8c6Ox0vGAGBpMhsMCdLb3g3cxqK5KmFMuEEi3ruvDXRElG0oGmvT5MHB14dzFJ6mKa18vTmcfXtVfK7sEeP7qnD94gB1wqLZxfXrlgFKmfRF171yltZ9-pt39F064NxcCuCovj8tqlQ"
             />
-            <div>
+            <div className="min-w-0">
               <p className="font-label-md text-label-md font-bold text-on-surface">Dr. Aris Thorne</p>
               <p className="font-body-sm text-[11px] text-on-surface-variant">Joined via Invite Link • 89 species logged</p>
             </div>
           </div>
-          <span className="font-label-sm text-[11px] text-on-surface-variant">2h ago</span>
+          <span className="font-label-sm text-[11px] text-on-surface-variant shrink-0">2h ago</span>
         </div>
       </div>
     </div>

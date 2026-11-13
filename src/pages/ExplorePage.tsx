@@ -166,14 +166,14 @@ export const ExplorePage: React.FC = () => {
       )}
 
       {/* Search & Filter Control Bar */}
-      <section className="px-margin pt-space-sm pb-space-xs flex flex-col gap-space-sm">
-        <div className="flex items-center gap-space-sm w-full relative" ref={searchContainerRef}>
+      <section className="px-3 sm:px-margin pt-space-sm pb-space-xs flex flex-col gap-space-sm">
+        <div className="flex items-center gap-2 sm:gap-space-sm w-full relative" ref={searchContainerRef}>
           {/* Search Input Container */}
-          <div className="flex-1 flex items-center h-12 px-space-md bg-surface-container rounded-full shadow-sm focus-within:bg-surface-container-lowest focus-within:shadow-md transition-all">
+          <div className="flex-1 min-w-0 flex items-center h-12 px-3 sm:px-space-md bg-surface-container rounded-full shadow-sm focus-within:bg-surface-container-lowest focus-within:shadow-md transition-all">
             <span className="material-symbols-outlined text-secondary text-[22px] shrink-0">search</span>
             <input
               aria-label="Search biodiversity encyclopedia"
-              className="flex-1 bg-transparent px-space-sm font-body-md text-on-surface focus:outline-none placeholder:text-outline"
+              className="flex-1 min-w-0 w-full bg-transparent px-2 sm:px-space-sm font-body-md text-on-surface focus:outline-none placeholder:text-outline"
               type="text"
               value={query}
               onChange={(e) => {
@@ -212,7 +212,7 @@ export const ExplorePage: React.FC = () => {
 
           {/* Filter Tray Trigger Button */}
           <button
-            className="h-12 px-space-md flex items-center gap-1.5 rounded-full bg-primary text-on-primary font-label-md text-label-md shadow-sm active:scale-95 transition-transform shrink-0"
+            className="h-12 px-3 sm:px-space-md flex items-center gap-1.5 rounded-full bg-primary text-on-primary font-label-md text-label-md shadow-sm active:scale-95 transition-transform shrink-0"
             type="button"
             onClick={() => setShowFilterDrawer(true)}
           >
@@ -255,7 +255,7 @@ export const ExplorePage: React.FC = () => {
         </div>
 
         {/* Active Filter Chips */}
-        <div className="flex items-center gap-space-xs overflow-x-auto no-scrollbar py-1 -mx-margin px-margin">
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-1.5 sm:gap-space-xs md:overflow-x-auto no-scrollbar py-1 md:-mx-margin md:px-margin">
           {activeBiome && (
             <button
               onClick={() => setActiveBiome(null)}
@@ -314,11 +314,11 @@ export const ExplorePage: React.FC = () => {
       </section>
 
       {/* Category Segmentation Tabs */}
-      <section className="px-margin mt-space-xs">
-        <div className="flex items-center gap-space-xs bg-surface-container-low p-1 rounded-full overflow-x-auto no-scrollbar">
+      <section className="px-3 sm:px-margin mt-space-xs">
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-1 sm:gap-space-xs bg-surface-container-low p-1 rounded-2xl sm:rounded-full md:overflow-x-auto no-scrollbar">
           <button
             onClick={() => setSelectedTab('all')}
-            className={`flex-1 min-w-[76px] py-1.5 px-3 rounded-full font-label-md text-label-md text-center shrink-0 transition-all ${
+            className={`sm:flex-1 py-1.5 px-2 sm:px-3 rounded-xl sm:rounded-full font-label-md text-label-md text-center transition-all ${
               selectedTab === 'all'
                 ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                 : 'text-on-surface-variant hover:text-on-surface'
@@ -329,7 +329,7 @@ export const ExplorePage: React.FC = () => {
           </button>
           <button
             onClick={() => setSelectedTab('fauna')}
-            className={`flex-1 min-w-[76px] py-1.5 px-3 rounded-full font-label-md text-label-md text-center shrink-0 transition-all ${
+            className={`sm:flex-1 py-1.5 px-2 sm:px-3 rounded-xl sm:rounded-full font-label-md text-label-md text-center transition-all ${
               selectedTab === 'fauna'
                 ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                 : 'text-on-surface-variant hover:text-on-surface'
@@ -340,7 +340,7 @@ export const ExplorePage: React.FC = () => {
           </button>
           <button
             onClick={() => setSelectedTab('flora')}
-            className={`flex-1 min-w-[76px] py-1.5 px-3 rounded-full font-label-md text-label-md text-center shrink-0 transition-all ${
+            className={`sm:flex-1 py-1.5 px-2 sm:px-3 rounded-xl sm:rounded-full font-label-md text-label-md text-center transition-all ${
               selectedTab === 'flora'
                 ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                 : 'text-on-surface-variant hover:text-on-surface'
@@ -351,7 +351,7 @@ export const ExplorePage: React.FC = () => {
           </button>
           <button
             onClick={() => setSelectedTab('fungi')}
-            className={`flex-1 min-w-[96px] py-1.5 px-3 rounded-full font-label-md text-label-md text-center shrink-0 transition-all ${
+            className={`sm:flex-1 py-1.5 px-2 sm:px-3 rounded-xl sm:rounded-full font-label-md text-label-md text-center transition-all ${
               selectedTab === 'fungi'
                 ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                 : 'text-on-surface-variant hover:text-on-surface'
@@ -364,7 +364,7 @@ export const ExplorePage: React.FC = () => {
       </section>
 
       {/* Results Count & Relevancy Sort Header */}
-      <section className="px-margin mt-space-md flex items-center justify-between">
+      <section className="px-3 sm:px-margin mt-space-md flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-baseline gap-1.5">
           <span className="font-headline-sm text-headline-sm text-on-surface font-bold">{results.length}</span>
           <span className="font-label-md text-label-md text-on-surface-variant">Animals & Plants Found</span>
@@ -383,7 +383,7 @@ export const ExplorePage: React.FC = () => {
       </section>
 
       {/* Search Results Cards Stack */}
-      <section className="px-margin mt-space-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-space-md">
+      <section className="px-3 sm:px-margin mt-space-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-space-md">
         {loading ? (
           <div className="flex flex-col items-center justify-center py-12 gap-3 text-on-surface-variant">
             <span className="material-symbols-outlined text-[32px] text-primary animate-spin">progress_activity</span>
@@ -482,9 +482,9 @@ export const ExplorePage: React.FC = () => {
                     ))}
                   </div>
 
-                  <div className="mt-space-xs pt-space-xs flex items-center justify-between">
+                  <div className="mt-space-xs pt-space-xs flex flex-wrap items-center justify-between gap-2">
                     <span className="font-label-sm text-label-sm text-outline">Observation count: 32 this season</span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
                         onClick={() => showToast(`Logged sighting for ${sp.commonName}`)}
                         className="px-3 py-1 rounded-full bg-primary-fixed text-on-primary-fixed-variant font-label-sm text-label-sm font-semibold flex items-center gap-1 active:scale-95 transition-transform"
@@ -510,7 +510,7 @@ export const ExplorePage: React.FC = () => {
       </section>
 
       {/* List Footer */}
-      <section className="px-margin mt-space-lg mb-space-sm flex flex-col items-center gap-space-sm text-center">
+      <section className="px-3 sm:px-margin mt-space-lg mb-space-sm flex flex-col items-center gap-space-sm text-center">
         <div className="flex items-center gap-2 text-on-surface-variant font-body-sm text-body-sm">
           <span className="w-1.5 h-1.5 rounded-full bg-secondary"></span>
           <span>Showing {results.length} of 142 results</span>

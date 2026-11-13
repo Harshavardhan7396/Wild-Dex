@@ -159,14 +159,14 @@ export const FeedPage: React.FC = () => {
       )}
 
       {/* Header Bar & Quick Links */}
-      <section className="px-margin pt-space-sm pb-space-xs flex items-center justify-between">
-        <div>
+      <section className="px-3 sm:px-margin pt-space-sm pb-space-xs flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
           <h1 className="font-headline-md text-headline-md text-primary font-bold">Community</h1>
           <p className="font-body-sm text-body-sm text-on-surface-variant">Live discoveries from nature lovers</p>
         </div>
         <Link
           to="/invite"
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold active:scale-95 transition-transform shadow-sm"
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold active:scale-95 transition-transform shadow-sm shrink-0"
         >
           <span className="material-symbols-outlined text-[18px]">person_add</span>
           <span>Invite</span>
@@ -175,7 +175,7 @@ export const FeedPage: React.FC = () => {
 
       {/* Active Naturalists Stories Strip */}
       <section className="py-space-sm border-b border-outline-variant/20">
-        <div className="flex items-center gap-3 overflow-x-auto px-margin no-scrollbar py-1">
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-3 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
           {/* Add story / my camera */}
           <Link to="/scan" className="flex flex-col items-center gap-1 shrink-0">
             <div className="w-14 h-14 rounded-full border-2 border-dashed border-primary flex items-center justify-center bg-surface-container-high text-primary">
@@ -204,11 +204,11 @@ export const FeedPage: React.FC = () => {
       </section>
 
       {/* Segmented Filter Control */}
-      <section className="px-margin pt-3">
-        <div className="flex bg-surface-container-low p-1 rounded-full">
+      <section className="px-3 sm:px-margin pt-3">
+        <div className="flex flex-wrap sm:flex-nowrap bg-surface-container-low p-1 rounded-2xl sm:rounded-full gap-1">
           <button
             onClick={() => setActiveTab('circle')}
-            className={`flex-1 py-1.5 rounded-full font-label-md text-label-md transition-all ${
+            className={`flex-1 min-w-[90px] py-1.5 px-2 rounded-full font-label-md text-label-md transition-all ${
               activeTab === 'circle' ? 'bg-surface-container-lowest text-primary font-bold shadow-sm' : 'text-on-surface-variant'
             }`}
           >
@@ -216,7 +216,7 @@ export const FeedPage: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('regional')}
-            className={`flex-1 py-1.5 rounded-full font-label-md text-label-md transition-all ${
+            className={`flex-1 min-w-[110px] py-1.5 px-2 rounded-full font-label-md text-label-md transition-all ${
               activeTab === 'regional' ? 'bg-surface-container-lowest text-primary font-bold shadow-sm' : 'text-on-surface-variant'
             }`}
           >
@@ -224,7 +224,7 @@ export const FeedPage: React.FC = () => {
           </button>
           <button
             onClick={() => setActiveTab('global')}
-            className={`flex-1 py-1.5 rounded-full font-label-md text-label-md transition-all ${
+            className={`flex-1 min-w-[110px] py-1.5 px-2 rounded-full font-label-md text-label-md transition-all ${
               activeTab === 'global' ? 'bg-surface-container-lowest text-primary font-bold shadow-sm' : 'text-on-surface-variant'
             }`}
           >
@@ -234,26 +234,26 @@ export const FeedPage: React.FC = () => {
       </section>
 
       {/* Feed Posts */}
-      <section className="px-margin pt-space-sm flex flex-col gap-space-md">
+      <section className="px-3 sm:px-margin pt-space-sm flex flex-col gap-space-md">
         {posts.map((post) => (
           <article
             key={post.id}
-            className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3"
+            className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3"
           >
             {/* Header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <img
                   alt={post.author.name}
                   src={post.author.avatar}
                   className="w-10 h-10 rounded-full object-cover shrink-0"
                 />
-                <div className="flex flex-col min-w-0">
-                  <div className="flex items-center gap-1.5">
+                <div className="flex flex-col min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span className="font-headline-sm text-headline-sm text-on-surface font-semibold leading-snug truncate">
                       {post.author.name}
                     </span>
-                    <span className="px-1.5 py-0.2 rounded bg-secondary-container/60 text-on-secondary-container text-[10px] font-bold">
+                    <span className="px-1.5 py-0.2 rounded bg-secondary-container/60 text-on-secondary-container text-[10px] font-bold shrink-0">
                       {post.author.badge}
                     </span>
                   </div>
@@ -289,14 +289,14 @@ export const FeedPage: React.FC = () => {
 
             {/* Caption & Species Info */}
             <div className="flex flex-col gap-1">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <Link
                   to={`/species/${post.species.id}`}
-                  className="font-headline-sm text-headline-sm text-on-surface font-bold hover:text-primary transition-colors"
+                  className="font-headline-sm text-headline-sm text-on-surface font-bold hover:text-primary transition-colors min-w-0"
                 >
                   {post.species.commonName}
                 </Link>
-                <span className="font-label-sm text-label-sm text-secondary font-semibold">
+                <span className="font-label-sm text-label-sm text-secondary font-semibold shrink-0">
                   {post.species.status}
                 </span>
               </div>
@@ -310,7 +310,7 @@ export const FeedPage: React.FC = () => {
             </div>
 
             {/* Interaction Buttons */}
-            <div className="flex items-center justify-between pt-2 border-t border-outline-variant/20">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-outline-variant/20">
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => toggleLike(post.id)}

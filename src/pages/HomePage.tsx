@@ -67,17 +67,17 @@ export const HomePage: React.FC = () => {
       )}
 
       {/* Top Greeting & Live Search Context */}
-      <section className="px-margin pt-3 pb-space-sm flex flex-col gap-space-sm">
-        <div className="flex items-center justify-between">
-          <div className="flex flex-col">
-            <h1 className="font-headline-md text-headline-md text-primary tracking-tight flex items-center gap-1.5">
+      <section className="px-3 sm:px-margin pt-3 pb-space-sm flex flex-col gap-space-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-col min-w-0">
+            <h1 className="font-headline-md text-headline-md text-primary tracking-tight flex flex-wrap items-center gap-1.5">
               {getGreeting()} <span>🌿</span>
             </h1>
             <p className="font-body-md text-body-md text-on-surface-variant">
               What will you discover today?
             </p>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary-container/50 text-on-secondary-container">
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary-container/50 text-on-secondary-container shrink-0">
             <span
               className="material-symbols-outlined text-[16px] text-secondary animate-pulse"
               style={{ fontVariationSettings: "'FILL' 1" }}
@@ -113,7 +113,7 @@ export const HomePage: React.FC = () => {
       </section>
 
       {/* Species of the Day (Immersive Hero Card) */}
-      <section className="px-margin py-space-sm">
+      <section className="px-3 sm:px-margin py-space-sm">
         <div className="relative w-full rounded-2xl overflow-hidden shadow-md bg-surface-container-low flex flex-col">
           {/* Media Box with Scrim */}
           <div className="relative w-full h-64 overflow-hidden">
@@ -125,7 +125,7 @@ export const HomePage: React.FC = () => {
             <div className="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent"></div>
 
             {/* Floating Status Badges */}
-            <div className="absolute top-3 inset-x-3 flex items-center justify-between">
+            <div className="absolute top-3 inset-x-3 flex flex-wrap items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-tertiary-fixed text-on-tertiary-fixed backdrop-blur-md shadow-sm">
                 <span className="material-symbols-outlined text-[15px]" style={{ fontVariationSettings: "'FILL' 1" }}>
                   star
@@ -221,9 +221,9 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* Category Chips (Horizontal Scroll) */}
+      {/* Category Chips (Wrap on mobile, Horizontal Scroll on desktop) */}
       <section className="py-space-sm flex flex-col gap-2">
-        <div className="px-margin flex items-center justify-between">
+        <div className="px-3 sm:px-margin flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-headline-sm text-headline-sm text-primary">Explore Groups</h3>
           <Link
             className="font-label-sm text-label-sm text-secondary font-semibold hover:underline"
@@ -232,14 +232,14 @@ export const HomePage: React.FC = () => {
             Family Tree
           </Link>
         </div>
-        <div className="flex items-center gap-2 overflow-x-auto px-margin no-scrollbar py-1">
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-2 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
           {categories.map((cat) => {
             const isActive = selectedCategory === cat.id;
             return (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
-                className={`shrink-0 h-11 px-4 rounded-full flex items-center gap-2 shadow-sm font-label-md text-label-md active:scale-95 transition-all ${
+                className={`shrink-0 h-11 px-3 sm:px-4 rounded-full flex items-center gap-1.5 sm:gap-2 shadow-sm font-label-md text-label-md active:scale-95 transition-all ${
                   isActive
                     ? 'bg-primary text-on-primary'
                     : 'bg-surface-container-high text-on-surface hover:bg-surface-container-highest'
@@ -262,9 +262,9 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* Quick Action Shortcuts (2x2 Grid) */}
-      <section className="px-margin py-space-sm">
-        <div className="grid grid-cols-2 gap-space-sm">
+      {/* Quick Action Shortcuts (Stack on narrow mobile, 2x2 Grid on sm+) */}
+      <section className="px-3 sm:px-margin py-space-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-sm">
           {/* AI Photo Scanner */}
           <Link
             className="p-space-md rounded-2xl bg-surface-container-high hover:bg-surface-container-highest flex flex-col justify-between gap-3 shadow-sm active:scale-98 transition-all min-h-[120px]"
@@ -384,8 +384,8 @@ export const HomePage: React.FC = () => {
 
       {/* Trending Discoveries Carousel */}
       <section className="py-space-sm flex flex-col gap-2.5">
-        <div className="px-margin flex items-center justify-between">
-          <div className="flex flex-col">
+        <div className="px-3 sm:px-margin flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-col min-w-0">
             <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-1.5">
               <span>Trending Discoveries</span>
               <span className="material-symbols-outlined text-[18px] text-tertiary">local_fire_department</span>
@@ -395,18 +395,18 @@ export const HomePage: React.FC = () => {
             </span>
           </div>
           <Link
-            className="font-label-sm text-label-sm text-secondary font-semibold hover:underline"
+            className="font-label-sm text-label-sm text-secondary font-semibold hover:underline shrink-0"
             to="/explore"
           >
             See All ({trendingSpecies.length + 138})
           </Link>
         </div>
 
-        <div className="flex items-center gap-3.5 overflow-x-auto px-margin no-scrollbar py-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:items-center gap-3.5 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
           {trendingSpecies.map((sp) => (
             <div
               key={sp.id}
-              className="shrink-0 w-64 rounded-2xl bg-surface-container-low overflow-hidden shadow-sm flex flex-col hover:shadow-md transition-shadow"
+              className="w-full md:shrink-0 md:w-64 rounded-2xl bg-surface-container-low overflow-hidden shadow-sm flex flex-col hover:shadow-md transition-shadow"
             >
               <div className="relative w-full h-36">
                 <img className="w-full h-full object-cover" alt={sp.commonName} src={sp.photoUrl} />
@@ -463,10 +463,10 @@ export const HomePage: React.FC = () => {
       </section>
 
       {/* Endangered Spotlight Banner */}
-      <section className="px-margin py-space-sm">
-        <div className="p-space-md rounded-2xl bg-tertiary-container text-on-tertiary-container relative overflow-hidden shadow-md flex flex-col gap-3">
+      <section className="px-3 sm:px-margin py-space-sm">
+        <div className="p-3 sm:p-space-md rounded-2xl bg-tertiary-container text-on-tertiary-container relative overflow-hidden shadow-md flex flex-col gap-3">
           <div className="absolute -right-12 -top-12 w-36 h-36 rounded-full bg-tertiary-fixed-dim/20 blur-2xl pointer-events-none"></div>
-          <div className="flex items-center justify-between relative z-10">
+          <div className="flex flex-wrap items-center justify-between gap-2 relative z-10">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-full bg-tertiary flex items-center justify-center text-on-tertiary">
                 <span className="material-symbols-outlined text-[18px]">emergency</span>
@@ -489,7 +489,7 @@ export const HomePage: React.FC = () => {
             </p>
           </div>
           {/* Actions */}
-          <div className="relative z-10 flex items-center gap-2 pt-1">
+          <div className="relative z-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
             <button
               onClick={() => showToast('Thank you for supporting wildlife protection!')}
               className="flex-1 h-11 px-4 rounded-full bg-surface-container-lowest text-tertiary font-label-md text-label-md font-bold flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform"
@@ -512,8 +512,8 @@ export const HomePage: React.FC = () => {
       </section>
 
       {/* Community Activity Feed Preview */}
-      <section className="px-margin pt-space-sm pb-space-lg flex flex-col gap-3">
-        <div className="flex items-center justify-between">
+      <section className="px-3 sm:px-margin pt-space-sm pb-space-lg flex flex-col gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-col">
             <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-1">
               <span>Community</span>
@@ -586,7 +586,7 @@ export const HomePage: React.FC = () => {
             </div>
 
             {/* Social Interaction Row */}
-            <div className="flex items-center justify-between pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
               <div className="flex items-center gap-2">
                 {/* Leaf Clap micro-action */}
                 <button

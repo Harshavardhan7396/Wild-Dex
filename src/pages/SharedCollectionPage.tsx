@@ -61,7 +61,7 @@ export const SharedCollectionPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full px-margin pb-12 pt-2 space-y-space-md">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-12 pt-2 space-y-space-md">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -90,9 +90,9 @@ export const SharedCollectionPage: React.FC = () => {
       </div>
 
       {/* Album Title Card */}
-      <div className="p-space-md rounded-2xl bg-surface-container-high shadow-sm flex flex-col gap-3">
-        <div className="flex items-start justify-between">
-          <div>
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-high shadow-sm flex flex-col gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 text-secondary">
               <span className="material-symbols-outlined text-[16px]">folder_shared</span>
               <span className="font-label-sm text-label-sm uppercase font-bold tracking-wider">
@@ -106,13 +106,13 @@ export const SharedCollectionPage: React.FC = () => {
               Plants and animals found around the Hoh, Bogachiel, and Quinault rivers.
             </p>
           </div>
-          <span className="px-2.5 py-1 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold">
+          <span className="px-2.5 py-1 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold shrink-0">
             48 Saved
           </span>
         </div>
 
         {/* Collaborators Strip */}
-        <div className="flex items-center justify-between pt-2 border-t border-outline-variant/30">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-outline-variant/30">
           <div className="flex items-center -space-x-2">
             {collaborators.map((c, i) => (
               <img
@@ -137,19 +137,19 @@ export const SharedCollectionPage: React.FC = () => {
       </div>
 
       {/* Member Management Drawer */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-2.5">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-2.5">
         <h3 className="font-headline-sm text-headline-sm text-on-surface">Team Members</h3>
         {collaborators.map((c, idx) => (
-          <div key={idx} className="flex items-center justify-between py-1.5 border-b border-outline-variant/20 last:border-0">
-            <div className="flex items-center gap-2.5 min-w-0">
+          <div key={idx} className="flex items-center justify-between gap-2 py-1.5 border-b border-outline-variant/20 last:border-0">
+            <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <img alt={c.name} src={c.avatar} className="w-9 h-9 rounded-full object-cover shrink-0" />
-              <div className="truncate">
+              <div className="min-w-0 truncate">
                 <p className="font-label-md text-label-md font-bold text-on-surface truncate">{c.name}</p>
                 <p className="font-body-sm text-[11px] text-on-surface-variant">{c.contributions} items saved</p>
               </div>
             </div>
             <span
-              className={`px-2 py-0.5 rounded-full font-label-sm text-[11px] font-bold ${
+              className={`px-2 py-0.5 rounded-full font-label-sm text-[11px] font-bold shrink-0 ${
                 c.role === 'Owner'
                   ? 'bg-primary text-on-primary'
                   : c.role === 'Editor'
@@ -165,12 +165,12 @@ export const SharedCollectionPage: React.FC = () => {
 
       {/* Shared Specimens Grid */}
       <div className="space-y-2">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-headline-sm text-headline-sm text-on-surface">Shared Items</h3>
-          <span className="font-label-sm text-label-sm text-secondary font-semibold">Synced</span>
+          <span className="font-label-sm text-label-sm text-secondary font-semibold shrink-0">Synced</span>
         </div>
 
-        <div className="grid grid-cols-2 gap-space-sm">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-sm">
           {CURATED_SPECIES.slice(0, 4).map((sp, i) => (
             <Link
               key={sp.id}

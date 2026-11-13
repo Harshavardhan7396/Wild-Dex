@@ -52,7 +52,7 @@ export const ComparisonPage: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col w-full px-margin pb-28 pt-2 space-y-space-md select-none">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-28 pt-2 space-y-space-md select-none">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -62,7 +62,7 @@ export const ComparisonPage: React.FC = () => {
       )}
 
       {/* Top Action Toolbar */}
-      <div className="flex items-center justify-between gap-space-sm">
+      <div className="flex flex-wrap items-center justify-between gap-space-sm">
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-label-sm shadow-sm">
           <span className="material-symbols-outlined text-[16px] text-primary" style={{ fontVariationSettings: "'FILL' 1" }}>
             balance
@@ -83,7 +83,7 @@ export const ComparisonPage: React.FC = () => {
       </div>
 
       {/* Specimen Dual Header Cards */}
-      <div className="grid grid-cols-2 gap-space-sm items-stretch">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-sm items-stretch">
         {/* Left Specimen */}
         <div className="flex flex-col rounded-xl bg-surface-container-lowest overflow-hidden shadow-sm">
           <div className="relative w-full aspect-[4/3] bg-surface-container overflow-hidden group">
@@ -172,8 +172,8 @@ export const ComparisonPage: React.FC = () => {
       </div>
 
       {/* Metric Filter Scroll Strip */}
-      <div className="relative -mx-margin px-margin">
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+      <div className="relative md:-mx-margin md:px-margin">
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-2 md:overflow-x-auto no-scrollbar py-1">
           {[
             { id: 'all', label: 'All Info' },
             { id: 'biometrics', label: 'Body Size' },
@@ -202,7 +202,7 @@ export const ComparisonPage: React.FC = () => {
         {/* 1. Average Male Weight */}
         {(activeFilter === 'all' || activeFilter === 'biometrics') && (
           <div className="bg-surface-container-lowest rounded-xl p-3.5 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-primary">
                   <span className="material-symbols-outlined text-[15px]">scale</span>
@@ -213,7 +213,7 @@ export const ComparisonPage: React.FC = () => {
                 Biometrics
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-center pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-center pt-1">
               <div className="p-2.5 rounded-lg bg-surface-container-low flex flex-col justify-center">
                 <span className="font-display-lg-mobile text-display-lg-mobile text-on-surface tracking-tight">
                   {leftSpecimen.metrics?.find((m) => m.label.includes('Mass'))?.value || '220'}{' '}
@@ -239,7 +239,7 @@ export const ComparisonPage: React.FC = () => {
         {/* 2. Total Body Length / Size */}
         {(activeFilter === 'all' || activeFilter === 'biometrics') && (
           <div className="bg-surface-container-lowest rounded-xl p-3.5 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-primary">
                   <span className="material-symbols-outlined text-[15px]">straighten</span>
@@ -248,7 +248,7 @@ export const ComparisonPage: React.FC = () => {
               </div>
               <span className="font-label-sm text-label-sm text-on-surface-variant">Head to Tail Tip</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-center pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-center pt-1">
               <div className="p-2.5 rounded-lg bg-surface-container-low flex flex-col items-center justify-center">
                 <span className="font-headline-md text-headline-md text-primary font-bold">
                   {leftSpecimen.id.includes('siberian') ? '3.0m – 3.3m' : '2.8m – 3.1m'}
@@ -272,7 +272,7 @@ export const ComparisonPage: React.FC = () => {
         {/* 3. Bite Force */}
         {(activeFilter === 'all' || activeFilter === 'dentition') && (
           <div className="bg-surface-container-lowest rounded-xl p-3.5 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-primary">
                   <span className="material-symbols-outlined text-[15px]">dentistry</span>
@@ -283,7 +283,7 @@ export const ComparisonPage: React.FC = () => {
                 Dentition
               </span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-center pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-center pt-1">
               <div className="p-2.5 rounded-lg bg-surface-container-low flex flex-col justify-center">
                 <span className="font-headline-md text-headline-md text-on-surface font-bold">
                   {leftSpecimen.metrics?.find((m) => m.label.includes('Bite'))?.value || '1,050'} PSI
@@ -305,7 +305,7 @@ export const ComparisonPage: React.FC = () => {
         {/* 4. Top Burst Sprint */}
         {(activeFilter === 'all' || activeFilter === 'hunting') && (
           <div className="bg-surface-container-lowest rounded-xl p-3.5 shadow-sm space-y-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <span className="w-6 h-6 rounded-full bg-surface-container-high flex items-center justify-center text-primary">
                   <span className="material-symbols-outlined text-[15px]">speed</span>
@@ -314,7 +314,7 @@ export const ComparisonPage: React.FC = () => {
               </div>
               <span className="font-label-sm text-label-sm text-on-surface-variant">Ambush Velocity</span>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-center pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-center pt-1">
               <div className="p-2.5 rounded-lg bg-surface-container-low flex flex-col items-center">
                 <span className="font-headline-md text-headline-md text-primary font-bold">65 km/h</span>
                 <span className="font-label-sm text-label-sm text-on-surface-variant mt-0.5">Short burst in forest understory</span>

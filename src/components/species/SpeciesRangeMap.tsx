@@ -144,8 +144,8 @@ export const SpeciesRangeMap: React.FC<SpeciesRangeMapProps> = ({
       </div>
 
       {/* Map Legend HUD */}
-      <div className="absolute bottom-2.5 inset-x-2.5 p-2.5 rounded-xl bg-surface/90 backdrop-blur-md shadow-md flex items-center justify-between z-10 border border-outline-variant/20">
-        <div className="flex items-center gap-3 sm:gap-4">
+      <div className="absolute bottom-2.5 inset-x-2.5 p-2.5 rounded-xl bg-surface/90 backdrop-blur-md shadow-md flex flex-wrap items-center justify-between gap-1.5 z-10 border border-outline-variant/20">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-4">
           <div className="flex items-center gap-1.5">
             <span className="w-3 h-3 rounded-full bg-primary-container ring-1 ring-primary-fixed"></span>
             <span className="font-label-sm text-label-sm text-on-surface font-medium">Core Range (45km)</span>

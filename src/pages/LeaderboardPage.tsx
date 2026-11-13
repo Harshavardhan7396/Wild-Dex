@@ -21,7 +21,7 @@ export const LeaderboardPage: React.FC = () => {
   ];
 
   return (
-    <div className="flex flex-col w-full px-margin pb-12 pt-2 space-y-space-md">
+    <div className="flex flex-col w-full px-3 sm:px-margin pb-12 pt-2 space-y-space-md">
       {/* Toast Notification */}
       {toast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
@@ -44,15 +44,15 @@ export const LeaderboardPage: React.FC = () => {
       </div>
 
       {/* Active Weekly Challenge Hero Card */}
-      <div className="p-space-md rounded-2xl bg-primary text-on-primary shadow-lg flex flex-col gap-3 relative overflow-hidden">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-secondary-container text-[20px]">emoji_events</span>
+      <div className="p-3 sm:p-space-md rounded-2xl bg-primary text-on-primary shadow-lg flex flex-col gap-3 relative overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="material-symbols-outlined text-secondary-container text-[20px] shrink-0">emoji_events</span>
             <span className="font-label-sm text-label-sm uppercase font-bold text-secondary-container tracking-wider">
               Weekly Field Expedition
             </span>
           </div>
-          <span className="font-label-sm text-label-sm px-2.5 py-0.5 rounded-full bg-on-primary/20 text-on-primary font-medium">
+          <span className="font-label-sm text-label-sm px-2.5 py-0.5 rounded-full bg-on-primary/20 text-on-primary font-medium shrink-0">
             3d 14h left
           </span>
         </div>
@@ -87,8 +87,8 @@ export const LeaderboardPage: React.FC = () => {
       </div>
 
       {/* Leaderboard Segmented Filters */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex bg-surface-container-low p-1 rounded-full flex-1">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex bg-surface-container-low p-1 rounded-full w-full sm:flex-1">
           <button
             onClick={() => setTimeFilter('weekly')}
             className={`flex-1 py-1.5 rounded-full font-label-md text-label-md transition-all ${
@@ -128,56 +128,56 @@ export const LeaderboardPage: React.FC = () => {
       </div>
 
       {/* Podium (Top 3 Naturalists) */}
-      <div className="pt-2 pb-1 grid grid-cols-3 gap-2 items-end text-center">
+      <div className="pt-2 pb-1 grid grid-cols-1 sm:grid-cols-3 gap-2 sm:items-end text-center">
         {/* 2nd Place */}
-        <div className="p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1 shadow-sm">
+        <div className="order-2 sm:order-1 p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1 shadow-sm">
           <span className="w-6 h-6 rounded-full bg-slate-300 text-slate-800 font-bold text-xs flex items-center justify-center">
             2
           </span>
           <img alt="Sarah" src={rankings[1].avatar} className="w-12 h-12 rounded-full object-cover ring-2 ring-slate-300" />
-          <p className="font-label-md text-label-md font-bold text-on-surface truncate max-w-[80px]">Sarah</p>
+          <p className="font-label-md text-label-md font-bold text-on-surface truncate max-w-full sm:max-w-[80px]">Sarah</p>
           <span className="font-label-sm text-xs text-secondary font-semibold">2,890 XP</span>
         </div>
 
         {/* 1st Place */}
-        <div className="p-3.5 rounded-2xl bg-secondary-container/40 flex flex-col items-center gap-1.5 shadow-md relative -top-2">
+        <div className="order-1 sm:order-2 p-3.5 rounded-2xl bg-secondary-container/40 flex flex-col items-center gap-1.5 shadow-md relative sm:-top-2">
           <span className="w-7 h-7 rounded-full bg-amber-400 text-amber-950 font-bold text-sm flex items-center justify-center shadow-sm">
             1
           </span>
           <img alt="Dr. Aris" src={rankings[0].avatar} className="w-14 h-14 rounded-full object-cover ring-3 ring-amber-400" />
-          <p className="font-label-md text-label-md font-bold text-on-surface truncate max-w-[90px]">Dr. Aris</p>
+          <p className="font-label-md text-label-md font-bold text-on-surface truncate max-w-full sm:max-w-[90px]">Dr. Aris</p>
           <span className="font-label-md text-sm text-secondary font-bold">3,420 XP</span>
         </div>
 
         {/* 3rd Place */}
-        <div className="p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1 shadow-sm">
+        <div className="order-3 p-3 rounded-2xl bg-surface-container-low flex flex-col items-center gap-1 shadow-sm">
           <span className="w-6 h-6 rounded-full bg-amber-700 text-white font-bold text-xs flex items-center justify-center">
             3
           </span>
           <img alt="Leo" src={rankings[2].avatar} className="w-12 h-12 rounded-full object-cover ring-2 ring-amber-700" />
-          <p className="font-label-md text-label-md font-bold text-on-surface truncate max-w-[80px]">Leo</p>
+          <p className="font-label-md text-label-md font-bold text-on-surface truncate max-w-full sm:max-w-[80px]">Leo</p>
           <span className="font-label-sm text-xs text-secondary font-semibold">2,410 XP</span>
         </div>
       </div>
 
       {/* Rankings Table */}
-      <div className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-2">
+      <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-2">
         <h3 className="font-headline-sm text-headline-sm text-on-surface">Explorer Rankings</h3>
         {rankings.map((user) => (
           <div
             key={user.rank}
-            className={`flex items-center justify-between p-2.5 rounded-xl transition-all ${
+            className={`flex items-center justify-between gap-2 p-2.5 rounded-xl transition-all ${
               user.isCurrentUser
                 ? 'bg-primary-container/20 ring-2 ring-primary text-on-surface font-semibold'
                 : 'hover:bg-surface-container'
             }`}
           >
-            <div className="flex items-center gap-3 min-w-0">
-              <span className="w-6 text-center font-bold text-sm text-on-surface-variant">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+              <span className="w-6 text-center font-bold text-sm text-on-surface-variant shrink-0">
                 #{user.rank}
               </span>
               <img alt={user.name} src={user.avatar} className="w-9 h-9 rounded-full object-cover shrink-0" />
-              <div className="truncate">
+              <div className="min-w-0 truncate">
                 <p className="font-label-md text-label-md font-bold truncate">
                   {user.name}
                 </p>

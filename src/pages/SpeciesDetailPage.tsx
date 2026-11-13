@@ -170,7 +170,7 @@ export const SpeciesDetailPage: React.FC = () => {
 
           {/* Thumbnail Strip (especially useful on Desktop) */}
           {galleryList.length > 1 && (
-            <div className="px-margin lg:px-0 flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
+            <div className="px-3 sm:px-margin lg:px-0 flex flex-wrap md:flex-nowrap items-center gap-2 md:overflow-x-auto no-scrollbar py-1">
               {galleryList.map((photo, i) => (
                 <button
                   key={i}
@@ -218,12 +218,12 @@ export const SpeciesDetailPage: React.FC = () => {
         </div>
 
         {/* RIGHT COLUMN (Desktop: 7 cols / Mobile: full width content) */}
-        <div className="lg:col-span-7 flex flex-col gap-space-lg px-margin lg:px-0 pt-2 lg:pt-0">
+        <div className="lg:col-span-7 flex flex-col gap-space-lg px-3 sm:px-margin lg:px-0 pt-2 lg:pt-0 min-w-0">
           {/* 2. Family & Identification Section */}
           <div className="flex flex-col gap-space-sm pt-2">
             {/* Breadcrumbs for Mobile */}
-            <div className="flex lg:hidden items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
-              <span className="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-label-sm whitespace-nowrap">
+            <div className="flex lg:hidden flex-wrap items-center gap-1.5 py-0.5">
+              <span className="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-label-sm">
                 {species.taxonomy.kingdom || 'Animalia'}
               </span>
               <span className="material-symbols-outlined text-[12px] text-outline">chevron_right</span>
@@ -289,10 +289,10 @@ export const SpeciesDetailPage: React.FC = () => {
           </div>
 
           {/* 3. Interactive Tab Bar */}
-          <div className="flex items-center gap-2 overflow-x-auto no-scrollbar border-b-0 pb-1">
+          <div className="flex flex-wrap md:flex-nowrap items-center gap-2 md:overflow-x-auto no-scrollbar border-b-0 pb-1">
             <button
               onClick={() => setActiveTab('overview')}
-              className={`px-4 py-2 rounded-full font-label-md text-label-md whitespace-nowrap shadow-sm transition-colors ${
+              className={`px-3 sm:px-4 py-2 rounded-full font-label-md text-label-md shadow-sm transition-colors ${
                 activeTab === 'overview'
                   ? 'bg-primary text-on-primary font-bold'
                   : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
@@ -346,7 +346,7 @@ export const SpeciesDetailPage: React.FC = () => {
           {(activeTab === 'overview' || activeTab === 'logs') && (
             <div className="flex flex-col gap-space-md">
               {/* 4-Card Quick Metrics Bento Grid */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-space-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-space-sm">
                 {species.metrics ? (
                   species.metrics.map((m, i) => (
                     <div key={i} className="p-3.5 rounded-xl bg-surface-container-low shadow-sm flex flex-col justify-between">
@@ -389,7 +389,7 @@ export const SpeciesDetailPage: React.FC = () => {
                 <p className="font-body-md text-body-md text-on-surface-variant leading-relaxed">
                   {species.description}
                 </p>
-                <div className="mt-2 pt-2 flex items-center justify-between">
+                <div className="mt-2 pt-2 flex flex-wrap items-center justify-between gap-2">
                   <span className="font-label-sm text-label-sm text-primary font-semibold flex items-center gap-1">
                     <span className="material-symbols-outlined text-[16px]">fingerprint</span>
                     Unique coat pattern ID active
@@ -408,8 +408,8 @@ export const SpeciesDetailPage: React.FC = () => {
           {/* 5. Tab: Where It Lives with Real Interactive Leaflet Range Map */}
           {(activeTab === 'habitat' || activeTab === 'overview') && (
             <div className="flex flex-col gap-space-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex flex-col">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-col min-w-0">
                   <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold">
                     Where It Lives
                   </h2>
@@ -417,7 +417,7 @@ export const SpeciesDetailPage: React.FC = () => {
                     {species.locationName || 'Fragmented river basins & tropical reserves'}
                   </span>
                 </div>
-                <span className="px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm font-medium">
+                <span className="px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm font-medium shrink-0">
                   Sea Level – 3,000m
                 </span>
               </div>
@@ -445,11 +445,11 @@ export const SpeciesDetailPage: React.FC = () => {
           {/* 6. Tab: What It Eats */}
           {(activeTab === 'diet' || activeTab === 'overview') && species.preyGuild && (
             <div className="flex flex-col gap-space-sm">
-              <div className="flex items-center justify-between">
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-col min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold">What It Eats</h2>
-                    <span className="px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary font-label-sm text-label-sm font-bold">
+                    <span className="px-2 py-0.5 rounded-full bg-tertiary/10 text-tertiary font-label-sm text-label-sm font-bold shrink-0">
                       {species.preyGuild.category}
                     </span>
                   </div>
@@ -457,11 +457,11 @@ export const SpeciesDetailPage: React.FC = () => {
                     {species.preyGuild.description}
                   </span>
                 </div>
-                <span className="material-symbols-outlined text-[20px] text-tertiary">restaurant</span>
+                <span className="material-symbols-outlined text-[20px] text-tertiary shrink-0">restaurant</span>
               </div>
 
               {/* Prey Cards: Responsive Grid on Desktop */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-space-sm">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-space-sm">
                 {species.preyGuild.items.map((item, idx) => (
                   <div key={idx} className="p-2.5 rounded-xl bg-surface-container-low shadow-sm flex flex-col gap-2">
                     <div className="relative w-full h-24 rounded-lg overflow-hidden bg-surface-container">
@@ -492,47 +492,47 @@ export const SpeciesDetailPage: React.FC = () => {
 
           {/* 7. Tab: How It Grows */}
           {(activeTab === 'lifecycle' || activeTab === 'overview') && (
-            <div className="p-4 rounded-xl bg-surface-container-low shadow-sm flex flex-col gap-space-sm">
-              <div className="flex items-center justify-between">
+            <div className="p-3 sm:p-4 rounded-xl bg-surface-container-low shadow-sm flex flex-col gap-space-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold">How It Grows</h2>
                 <Link
                   to="/lifecycle"
-                  className="font-label-sm text-label-sm text-primary font-semibold flex items-center gap-0.5 hover:underline"
+                  className="font-label-sm text-label-sm text-primary font-semibold flex items-center gap-0.5 hover:underline shrink-0"
                 >
                   <span>Interactive Guide</span>
                   <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
                 </Link>
               </div>
               {/* Mini Timeline Steps */}
-              <div className="relative flex items-center justify-between pt-2">
-                <div className="absolute left-3 right-3 top-5 h-0.5 bg-outline-variant -z-0"></div>
-                <div className="flex flex-col items-center gap-1 z-10">
+              <div className="relative grid grid-cols-4 gap-1 pt-2 text-center">
+                <div className="absolute left-6 right-6 top-5 h-0.5 bg-outline-variant -z-0"></div>
+                <div className="flex flex-col items-center gap-1 z-10 min-w-0">
                   <div className="w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center font-label-sm text-label-sm font-bold shadow-sm">
                     1
                   </div>
-                  <span className="font-label-sm text-label-sm text-on-surface font-semibold">Baby</span>
-                  <span className="font-body-sm text-body-sm text-outline">0–6 mo</span>
+                  <span className="font-label-sm text-[11px] sm:text-label-sm text-on-surface font-semibold leading-tight">Baby</span>
+                  <span className="font-body-sm text-[10px] sm:text-body-sm text-outline">0–6 mo</span>
                 </div>
-                <div className="flex flex-col items-center gap-1 z-10">
+                <div className="flex flex-col items-center gap-1 z-10 min-w-0">
                   <div className="w-6 h-6 rounded-full bg-primary text-on-primary flex items-center justify-center font-label-sm text-label-sm font-bold shadow-sm">
                     2
                   </div>
-                  <span className="font-label-sm text-label-sm text-on-surface font-semibold">Growing</span>
-                  <span className="font-body-sm text-body-sm text-outline">1–2 yr</span>
+                  <span className="font-label-sm text-[11px] sm:text-label-sm text-on-surface font-semibold leading-tight">Growing</span>
+                  <span className="font-body-sm text-[10px] sm:text-body-sm text-outline">1–2 yr</span>
                 </div>
-                <div className="flex flex-col items-center gap-1 z-10">
+                <div className="flex flex-col items-center gap-1 z-10 min-w-0">
                   <div className="w-6 h-6 rounded-full bg-secondary text-on-secondary flex items-center justify-center font-label-sm text-label-sm font-bold shadow-sm">
                     3
                   </div>
-                  <span className="font-label-sm text-label-sm text-on-surface font-semibold">Young Adult</span>
-                  <span className="font-body-sm text-body-sm text-outline">2–3 yr</span>
+                  <span className="font-label-sm text-[11px] sm:text-label-sm text-on-surface font-semibold leading-tight">Young Adult</span>
+                  <span className="font-body-sm text-[10px] sm:text-body-sm text-outline">2–3 yr</span>
                 </div>
-                <div className="flex flex-col items-center gap-1 z-10">
+                <div className="flex flex-col items-center gap-1 z-10 min-w-0">
                   <div className="w-6 h-6 rounded-full bg-tertiary text-on-tertiary flex items-center justify-center font-label-sm text-label-sm font-bold shadow-sm">
                     4
                   </div>
-                  <span className="font-label-sm text-label-sm text-on-surface font-semibold">Full Grown</span>
-                  <span className="font-body-sm text-body-sm text-outline">4+ yr</span>
+                  <span className="font-label-sm text-[11px] sm:text-label-sm text-on-surface font-semibold leading-tight">Full Grown</span>
+                  <span className="font-body-sm text-[10px] sm:text-body-sm text-outline">4+ yr</span>
                 </div>
               </div>
             </div>
@@ -540,14 +540,14 @@ export const SpeciesDetailPage: React.FC = () => {
 
           {/* 8. Related Animals & Plants & Compare Button */}
           <div className="flex flex-col gap-space-sm mb-4">
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-col min-w-0">
                 <h2 className="font-headline-sm text-headline-sm text-on-surface font-semibold">Related Animals & Plants</h2>
                 <span className="font-body-sm text-body-sm text-on-surface-variant">Similar animals and plants</span>
               </div>
               <Link
                 to={`/compare?a=${species.id}&b=siberian-tiger`}
-                className="px-3 py-1.5 rounded-full bg-surface-container-high text-primary font-label-sm text-label-sm font-semibold flex items-center gap-1 hover:bg-surface-variant transition-colors"
+                className="px-3 py-1.5 rounded-full bg-surface-container-high text-primary font-label-sm text-label-sm font-semibold flex items-center gap-1 hover:bg-surface-variant transition-colors shrink-0"
               >
                 <span>Compare</span>
                 <span className="material-symbols-outlined text-[16px]">compare_arrows</span>
@@ -619,7 +619,7 @@ export const SpeciesDetailPage: React.FC = () => {
       )}
 
       {/* 9. Sticky Bottom Action Dock */}
-      <div className="sticky bottom-0 inset-x-0 z-40 bg-surface/90 backdrop-blur-xl shadow-[0_-4px_24px_rgba(0,0,0,0.06)] px-margin py-3 mt-4 border-t border-outline-variant/30">
+      <div className="sticky bottom-0 inset-x-0 z-40 bg-surface/90 backdrop-blur-xl shadow-[0_-4px_24px_rgba(0,0,0,0.06)] px-3 sm:px-margin py-3 mt-4 border-t border-outline-variant/30">
         <div className="flex items-center gap-space-sm max-w-lg md:max-w-2xl mx-auto">
           <button
             className={`flex-1 h-12 rounded-full font-label-lg text-label-lg flex items-center justify-center gap-2 shadow-md active:scale-98 transition-all ${
