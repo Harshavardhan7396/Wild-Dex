@@ -4,13 +4,15 @@ import { useAuth } from '../contexts/AuthContext';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, userProfile, setAuthModalOpen } = useAuth();
+  const { currentUser, userProfile, setAuthModalOpen, saveOnboardingPreferences } = useAuth();
   const [darkMode, setDarkMode] = useState(false);
   const [language, setLanguage] = useState('English');
   const [offlineDownloaded, setOfflineDownloaded] = useState(true);
   const [obfuscateGps, setObfuscateGps] = useState(true);
   const [publicProfile, setPublicProfile] = useState(true);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [clearingPrefs, setClearingPrefs] = useState(false);
+  const [prefsError, setPrefsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -27,6 +29,28 @@ export const SettingsPage: React.FC = () => {
     } else {
       document.documentElement.classList.remove('dark');
       showToast('Light mode restored');
+    }
+  };
+
+  const handleClearInterestsAndLocation = async () => {
+    if (!currentUser || clearingPrefs) return;
+    setClearingPrefs(true);
+    setPrefsError(null);
+    try {
+      await saveOnboardingPreferences({
+        interests: [],
+        favoriteSpecies: [],
+        onboardingDone: true,
+        locationConsent: false,
+        homeLat: null,
+        homeLng: null,
+      });
+      showToast('Saved interests and location deleted');
+    } catch (err: any) {
+      console.error('Failed to delete saved interests & location:', err);
+      setPrefsError(err?.message || 'Could not delete saved interests and location.');
+    } finally {
+      setClearingPrefs(false);
     }
   };
 
@@ -258,12 +282,40 @@ export const SettingsPage: React.FC = () => {
         </button>
 
         <Link
-          to="/onboarding"
-          className="w-full h-11 rounded-full bg-surface-container text-primary font-label-md text-label-md font-semibold flex items-center justify-center gap-2 hover:bg-surface-container-high"
+          to="/onboarding?edit=1"
+          className="w-full min-h-[44px] px-4 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-bold flex items-center justify-center gap-2 hover:opacity-95"
         >
-          <span className="material-symbols-outlined text-[18px]">menu_book</span>
-          <span>Replay Welcome Tour</span>
+          <span className="material-symbols-outlined text-[18px]">tune</span>
+          <span>Edit my interests and location</span>
         </Link>
+
+        {currentUser &&
+          ((userProfile?.interests?.length ?? 0) > 0 ||
+            (userProfile?.favoriteSpecies?.length ?? 0) > 0 ||
+            userProfile?.locationConsent) && (
+            <button
+              type="button"
+              disabled={clearingPrefs}
+              onClick={handleClearInterestsAndLocation}
+              className="w-full min-h-[44px] px-4 rounded-full bg-surface-container text-error font-label-md text-label-md font-semibold flex items-center justify-center gap-2 hover:bg-error-container/25 disabled:opacity-50"
+            >
+              <span className="material-symbols-outlined text-[18px]">location_off</span>
+              <span>{clearingPrefs ? 'Deleting...' : 'Delete saved interests & location'}</span>
+            </button>
+          )}
+
+        {prefsError && (
+          <div className="p-3 rounded-xl bg-error-container/25 border border-error/40 flex items-center justify-between gap-2">
+            <p className="font-body-sm text-body-sm text-error">{prefsError}</p>
+            <button
+              type="button"
+              onClick={handleClearInterestsAndLocation}
+              className="px-3 py-1 rounded-full bg-error text-on-error font-label-sm text-label-sm font-semibold shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         <button
           onClick={() => setShowDeleteModal(true)}

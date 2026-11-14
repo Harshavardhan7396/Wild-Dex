@@ -13,12 +13,35 @@ export interface AuthUser {
 // Compatibility export
 export type User = AuthUser;
 
+export interface FavoriteSpeciesItem {
+  id: number;
+  commonName: string;
+  scientificName: string;
+  photoUrl?: string;
+}
+
+export interface OnboardingSavePayload {
+  interests: string[];
+  favoriteSpecies: FavoriteSpeciesItem[];
+  onboardingDone: boolean;
+  locationConsent: boolean;
+  homeLat: number | null;
+  homeLng: number | null;
+}
+
 export interface UserProfile {
   id: string;
   email: string;
   displayName: string;
   photoURL: string;
   onboardingCompleted: boolean;
+  onboardingDone: boolean;
+  interests: string[];
+  favoriteSpecies: FavoriteSpeciesItem[];
+  locationConsent: boolean;
+  homeLat: number | null;
+  homeLng: number | null;
+  notInterestedIds: number[];
   experienceLevel?: 'novice' | 'enthusiast' | 'researcher';
   favoriteTaxa?: string;
   bio?: string;
@@ -43,10 +66,78 @@ interface AuthContextType {
   signInWithEmail: (email: string, password: string) => Promise<AuthUser | null>;
   logout: () => Promise<void>;
   updateUserProfile: (data: Partial<UserProfile>) => Promise<void>;
+  saveOnboardingPreferences: (payload: OnboardingSavePayload) => Promise<void>;
+  dismissSpeciesInterest: (taxonId: number) => Promise<void>;
+  resetDismissedSpecies: () => Promise<void>;
   isConfigured: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function roundCoord(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || Number.isNaN(value)) return null;
+  return Math.round(value * 100) / 100;
+}
+
+function parseFavoriteSpecies(raw: unknown): FavoriteSpeciesItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item): FavoriteSpeciesItem | null => {
+      if (!item || typeof item !== 'object') return null;
+      const obj = item as Record<string, unknown>;
+      const id = typeof obj.id === 'number' ? obj.id : Number(obj.id);
+      const commonName = typeof obj.commonName === 'string'
+        ? obj.commonName
+        : typeof obj.common_name === 'string'
+        ? obj.common_name
+        : typeof obj.name === 'string'
+        ? obj.name
+        : '';
+      const scientificName = typeof obj.scientificName === 'string'
+        ? obj.scientificName
+        : typeof obj.scientific_name === 'string'
+        ? obj.scientific_name
+        : '';
+      if (!commonName && !scientificName) return null;
+      return {
+        id: Number.isFinite(id) ? id : 0,
+        commonName: commonName || scientificName,
+        scientificName: scientificName || commonName,
+        photoUrl:
+          typeof obj.photoUrl === 'string'
+            ? obj.photoUrl
+            : typeof obj.photo_url === 'string'
+            ? obj.photo_url
+            : undefined,
+      };
+    })
+    .filter((x): x is FavoriteSpeciesItem => x !== null);
+}
+
+const NOT_INTERESTED_KEY_PREFIX = 'wilddex_not_interested_';
+
+function getLocalNotInterestedIds(userId: string): number[] {
+  try {
+    const raw = localStorage.getItem(`${NOT_INTERESTED_KEY_PREFIX}${userId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+  } catch {
+    return [];
+  }
+}
+
+function setLocalNotInterestedIds(userId: string, ids: number[]): void {
+  try {
+    localStorage.setItem(`${NOT_INTERESTED_KEY_PREFIX}${userId}`, JSON.stringify(ids));
+  } catch {}
+}
+
+function parseNotInterestedIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
@@ -105,6 +196,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (data) {
         const resolvedName = data.display_name || authUser.displayName;
         const resolvedPhoto = data.avatar_url || authUser.photoURL;
+        const onboardingDone = data.onboarding_done === true;
+        const interests = Array.isArray(data.interests)
+          ? data.interests.filter((x: unknown): x is string => typeof x === 'string')
+          : [];
+        const favoriteSpecies = parseFavoriteSpecies(data.favorite_species);
+        const locationConsent = Boolean(data.location_consent);
+        const rawHomeLoc =
+          data.home_location && typeof data.home_location === 'object'
+            ? (data.home_location as Record<string, unknown>)
+            : null;
+        const homeLat = roundCoord(
+          typeof data.home_lat === 'number'
+            ? data.home_lat
+            : typeof rawHomeLoc?.lat === 'number'
+            ? rawHomeLoc.lat
+            : null
+        );
+        const homeLng = roundCoord(
+          typeof data.home_lng === 'number'
+            ? data.home_lng
+            : typeof rawHomeLoc?.lng === 'number'
+            ? rawHomeLoc.lng
+            : null
+        );
+        const locationSummary =
+          homeLat !== null && homeLng !== null
+            ? `Near ${homeLat.toFixed(2)}, ${homeLng.toFixed(2)}`
+            : 'Location not set';
+        const remoteDismissed = parseNotInterestedIds(data.not_interested_taxa);
+        const localDismissed = getLocalNotInterestedIds(authUser.id);
+        const mergedDismissed = Array.from(new Set([...remoteDismissed, ...localDismissed]));
+        setLocalNotInterestedIds(authUser.id, mergedDismissed);
+
         setCurrentUser((prev) =>
           prev
             ? {
@@ -119,15 +243,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: authUser.email || '',
           displayName: resolvedName || 'Nature Explorer',
           photoURL: resolvedPhoto || '',
-          onboardingCompleted: true,
+          onboardingCompleted: onboardingDone,
+          onboardingDone,
+          interests,
+          favoriteSpecies,
+          locationConsent,
+          homeLat,
+          homeLng,
+          notInterestedIds: mergedDismissed,
           experienceLevel: 'enthusiast',
-          favoriteTaxa: 'All Kingdoms',
+          favoriteTaxa: interests.length > 0 ? interests.join(', ') : 'All Kingdoms',
           bio: data.bio || 'Exploring biodiversity with WildDex.',
-          location: 'Field Research Site',
+          location: locationSummary,
           createdAt: data.created_at,
           updatedAt: data.created_at,
         });
       } else {
+        const localDismissed = getLocalNotInterestedIds(authUser.id);
         // Upsert initial profile if trigger has not executed yet
         const initialProfile: UserProfile = {
           id: authUser.id,
@@ -135,23 +267,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           displayName: authUser.displayName || 'Nature Explorer',
           photoURL: authUser.photoURL || '',
           onboardingCompleted: false,
+          onboardingDone: false,
+          interests: [],
+          favoriteSpecies: [],
+          locationConsent: false,
+          homeLat: null,
+          homeLng: null,
+          notInterestedIds: localDismissed,
           experienceLevel: 'enthusiast',
           favoriteTaxa: 'All Kingdoms',
           bio: 'Exploring biodiversity with WildDex.',
-          location: 'Field Research Site',
+          location: 'Location not set',
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
 
-        const { error: upsertError } = await supabase.from('profiles').upsert([
-          {
-            id: authUser.id,
-            display_name: initialProfile.displayName,
-            avatar_url: initialProfile.photoURL,
-            bio: initialProfile.bio,
-            is_public: true,
-          },
-        ]);
+        const { error: upsertError } = await supabase.from('profiles').upsert(
+          [
+            {
+              id: authUser.id,
+              display_name: initialProfile.displayName,
+              avatar_url: initialProfile.photoURL,
+              bio: initialProfile.bio,
+              is_public: true,
+              onboarding_done: false,
+            },
+          ],
+          { onConflict: 'id', ignoreDuplicates: true }
+        );
 
         if (upsertError) {
           console.warn('Could not upsert profile row:', upsertError);
@@ -252,16 +395,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // After sign-up, save the username in the profiles table
       if (data.user) {
         try {
-          const { error: profileError } = await supabase
-            .from('profiles')
-            .upsert([
+          const { error: profileError } = await supabase.from('profiles').upsert(
+            [
               {
                 id: data.user.id,
                 display_name: cleanUsername,
                 bio: 'Exploring biodiversity with WildDex.',
                 is_public: true,
+                onboarding_done: false,
               },
-            ]);
+            ],
+            { onConflict: 'id', ignoreDuplicates: true }
+          );
 
           if (profileError) {
             console.warn('[Supabase Profile Upsert Warning]:', profileError);
@@ -375,6 +520,138 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const saveOnboardingPreferences = async (payload: OnboardingSavePayload) => {
+    const roundedLat = payload.locationConsent ? roundCoord(payload.homeLat) : null;
+    const roundedLng = payload.locationConsent ? roundCoord(payload.homeLng) : null;
+
+    if (!isSupabaseConfigured) {
+      throw new Error('Supabase is not configured. Please check your environment settings.');
+    }
+
+    const { data: userRes, error: authErr } = await supabase.auth.getUser();
+    if (authErr || !userRes?.user) {
+      throw new Error('Please sign in to save your preferences.');
+    }
+
+    const userId = userRes.user.id;
+    const dbPayload: Record<string, any> = {
+      id: userId,
+      interests: payload.interests,
+      favorite_species: payload.favoriteSpecies,
+      onboarding_done: payload.onboardingDone,
+      location_consent: payload.locationConsent,
+      home_lat: roundedLat,
+      home_lng: roundedLng,
+    };
+
+    const { error } = await supabase
+      .from('profiles')
+      .upsert([dbPayload], { onConflict: 'id' });
+
+    if (error) {
+      // Fallback if the table stores rounded home coordinates inside a single home_location JSON column
+      if (
+        error.code === 'PGRST204' ||
+        error.code === '42703' ||
+        error.message?.toLowerCase().includes('home_lat') ||
+        error.message?.toLowerCase().includes('home_lng')
+      ) {
+        const fallbackPayload = {
+          id: userId,
+          interests: payload.interests,
+          favorite_species: payload.favoriteSpecies,
+          onboarding_done: payload.onboardingDone,
+          location_consent: payload.locationConsent,
+          home_location:
+            roundedLat !== null && roundedLng !== null
+              ? { lat: roundedLat, lng: roundedLng }
+              : null,
+        };
+        const { error: fallbackError } = await supabase
+          .from('profiles')
+          .upsert([fallbackPayload], { onConflict: 'id' });
+        if (fallbackError) {
+          console.error('Supabase saveOnboardingPreferences fallback error:', fallbackError);
+          throw new Error(fallbackError.message || 'Could not save your preferences.');
+        }
+      } else {
+        console.error('Supabase saveOnboardingPreferences error:', error);
+        throw new Error(error.message || 'Could not save your preferences.');
+      }
+    }
+
+    const locationSummary =
+      roundedLat !== null && roundedLng !== null
+        ? `Near ${roundedLat.toFixed(2)}, ${roundedLng.toFixed(2)}`
+        : 'Location not set';
+
+    setUserProfile((prev) =>
+      prev
+        ? {
+            ...prev,
+            onboardingCompleted: payload.onboardingDone,
+            onboardingDone: payload.onboardingDone,
+            interests: payload.interests,
+            favoriteSpecies: payload.favoriteSpecies,
+            locationConsent: payload.locationConsent,
+            homeLat: roundedLat,
+            homeLng: roundedLng,
+            favoriteTaxa:
+              payload.interests.length > 0 ? payload.interests.join(', ') : 'All Kingdoms',
+            location: locationSummary,
+          }
+        : null
+    );
+  };
+
+  const persistNotInterestedList = async (nextIds: number[]) => {
+    const storageUserId = currentUser?.id || 'guest';
+    setLocalNotInterestedIds(storageUserId, nextIds);
+
+    if (!currentUser || !isSupabaseConfigured) {
+      return;
+    }
+
+    try {
+      const { data: userRes, error: authErr } = await supabase.auth.getUser();
+      if (authErr || !userRes?.user) return;
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({ not_interested_taxa: nextIds })
+        .eq('id', userRes.user.id);
+
+      if (error) {
+        if (
+          error.code === 'PGRST204' ||
+          error.code === '42703' ||
+          error.message?.toLowerCase().includes('not_interested_taxa')
+        ) {
+          console.warn('profiles.not_interested_taxa column not present yet; kept locally per user.');
+          return;
+        }
+        throw new Error(error.message || 'Could not save preference.');
+      }
+    } catch (err) {
+      console.error('Error saving not_interested_taxa:', err);
+      throw err;
+    }
+  };
+
+  const dismissSpeciesInterest = async (taxonId: number) => {
+    if (!taxonId || !Number.isFinite(taxonId)) return;
+    const currentIds = userProfile?.notInterestedIds ?? getLocalNotInterestedIds(currentUser?.id || 'guest');
+    if (currentIds.includes(taxonId)) return;
+    const nextIds = [...currentIds, taxonId];
+    setUserProfile((prev) => (prev ? { ...prev, notInterestedIds: nextIds } : prev));
+    await persistNotInterestedList(nextIds);
+  };
+
+  const resetDismissedSpecies = async () => {
+    setUserProfile((prev) => (prev ? { ...prev, notInterestedIds: [] } : prev));
+    await persistNotInterestedList([]);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -389,6 +666,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signInWithEmail,
         logout,
         updateUserProfile,
+        saveOnboardingPreferences,
+        dismissSpeciesInterest,
+        resetDismissedSpecies,
         isConfigured: isSupabaseConfigured,
       }}
     >

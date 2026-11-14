@@ -15,8 +15,23 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   avatar_url TEXT,
   bio TEXT,
   is_public BOOLEAN DEFAULT true,
+  onboarding_done BOOLEAN DEFAULT false,
+  interests TEXT[] DEFAULT '{}'::text[],
+  favorite_species JSONB DEFAULT '[]'::jsonb,
+  location_consent BOOLEAN DEFAULT false,
+  home_lat DOUBLE PRECISION,
+  home_lng DOUBLE PRECISION,
+  not_interested_taxa BIGINT[] DEFAULT '{}'::bigint[],
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_done BOOLEAN DEFAULT false;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS interests TEXT[] DEFAULT '{}'::text[];
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS favorite_species JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS location_consent BOOLEAN DEFAULT false;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS home_lat DOUBLE PRECISION;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS home_lng DOUBLE PRECISION;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS not_interested_taxa BIGINT[] DEFAULT '{}'::bigint[];
 
 -- Unique case-insensitive index for usernames
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles(LOWER(username));

@@ -1,45 +1,256 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { getSpeciesOfTheDay, CURATED_SPECIES, MOCK_FEED_OBSERVATIONS } from '../services/speciesService';
-import { Species } from '../types/species';
-import { InfoTooltip } from '../components/common/InfoTooltip';
-import { formatConservationStatus, getConservationMeaning } from '../utils/formatters';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  ForYouSpeciesItem,
+  fetchForYouSpecies,
+  fetchSimilarToFavorites,
+  buildScanResultFromForYou,
+  generateFallbackSpecimenDataUrl,
+} from '../services/forYouService';
+import {
+  addSpecimenToSupabase,
+  getSupabaseUserCollection,
+} from '../services/supabaseCollectionService';
+import { ForYouSpeciesCard } from '../components/home/ForYouSpeciesCard';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, userProfile } = useAuth();
-  const [speciesOfDay] = useState<Species>(() => getSpeciesOfTheDay());
+  const {
+    currentUser,
+    userProfile,
+    setAuthModalOpen,
+    dismissSpeciesInterest,
+    resetDismissedSpecies,
+  } = useAuth();
+
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [bookmarked, setBookmarked] = useState(false);
-  const [clapsCount, setClapsCount] = useState(42);
-  const [hasClapped, setHasClapped] = useState(false);
-  const [wishlisted, setWishlisted] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [audioMatchActive, setAudioMatchActive] = useState(false);
-  const [audioListening, setAudioListening] = useState(false);
+
+  // "For You" state
+  const [forYouItems, setForYouItems] = useState<ForYouSpeciesItem[]>([]);
+  const [forYouLoading, setForYouLoading] = useState(true);
+  const [forYouError, setForYouError] = useState<string | null>(null);
+  const [forYouRefreshTick, setForYouRefreshTick] = useState(0);
+  const [forYouForceRefresh, setForYouForceRefresh] = useState(false);
+
+  // "Similar to your favorites" state
+  const [similarItems, setSimilarItems] = useState<ForYouSpeciesItem[]>([]);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [similarError, setSimilarError] = useState<string | null>(null);
+  const [similarRefreshTick, setSimilarRefreshTick] = useState(0);
+  const [similarForceRefresh, setSimilarForceRefresh] = useState(false);
+
+  // Collection saving state
+  const [addingTaxonId, setAddingTaxonId] = useState<number | null>(null);
+  const [addedSciNames, setAddedSciNames] = useState<Set<string>>(new Set());
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const categories = [
-    { id: 'all', label: 'All', icon: '🐾', count: '45.2k' },
-    { id: 'mammals', label: 'Mammals', icon: '🐯', count: '6.1k' },
-    { id: 'birds', label: 'Birds', icon: '🦅', count: '10.8k' },
-    { id: 'reptiles', label: 'Reptiles', icon: '🦎', count: '4.3k' },
-    { id: 'insects', label: 'Insects', icon: '🦋', count: '14.9k' },
-    { id: 'marine', label: 'Marine Life', icon: '🐋', count: '3.7k' },
-    { id: 'plants', label: 'Plants', icon: '🌿', count: '18.2k' },
-    { id: 'fungi', label: 'Fungi', icon: '🍄', count: '2.4k' },
-  ];
-
-  // Filtered discoveries for carousel
-  const trendingSpecies = CURATED_SPECIES.filter(
-    (s) => s.id !== 'bengal-tiger' && (selectedCategory === 'all' || s.category === selectedCategory)
+  const interests = userProfile?.interests ?? [];
+  const favorites = userProfile?.favoriteSpecies ?? [];
+  const notInterestedIds = userProfile?.notInterestedIds ?? [];
+  const hasLocation = Boolean(
+    userProfile?.locationConsent &&
+      userProfile?.homeLat !== null &&
+      userProfile?.homeLat !== undefined &&
+      userProfile?.homeLng !== null &&
+      userProfile?.homeLng !== undefined
   );
+  const homeLat = hasLocation ? userProfile?.homeLat ?? null : null;
+  const homeLng = hasLocation ? userProfile?.homeLng ?? null : null;
+
+  const interestsKey = interests.join('|');
+  const favoritesKey = favorites
+    .map((f) => `${f.id}:${f.scientificName}`)
+    .join('|');
+
+  // Pre-load existing collection scientific names for signed-in user
+  useEffect(() => {
+    let active = true;
+    if (!currentUser?.id) {
+      setAddedSciNames(new Set());
+      return;
+    }
+
+    getSupabaseUserCollection(currentUser.id)
+      .then((items) => {
+        if (!active) return;
+        const names = new Set(
+          items
+            .map((item) => item.scientificName?.trim().toLowerCase())
+            .filter(Boolean)
+        );
+        setAddedSciNames(names);
+      })
+      .catch((err) => {
+        console.warn('Could not preload collection items on Home:', err);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.id]);
+
+  // Fetch "For You" species (with or without home location)
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+
+    async function loadForYou() {
+      setForYouLoading(true);
+      setForYouError(null);
+      try {
+        const items = await fetchForYouSpecies({
+          interests,
+          lat: homeLat,
+          lng: homeLng,
+          hasLocation,
+          forceRefresh: forYouForceRefresh,
+          signal: controller.signal,
+        });
+        if (active) {
+          setForYouItems(items);
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || !active) return;
+        setForYouError(err?.message || 'Could not load For You suggestions right now.');
+        setForYouItems([]);
+      } finally {
+        if (active) {
+          setForYouLoading(false);
+          setForYouForceRefresh(false);
+        }
+      }
+    }
+
+    loadForYou();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [interestsKey, hasLocation, homeLat, homeLng, forYouRefreshTick]);
+
+  // Fetch "Similar to your favorites" using iNaturalist taxa API (same genus or family)
+  useEffect(() => {
+    if (favorites.length === 0) {
+      setSimilarItems([]);
+      setSimilarLoading(false);
+      setSimilarError(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    let active = true;
+
+    async function loadSimilar() {
+      setSimilarLoading(true);
+      setSimilarError(null);
+      try {
+        const items = await fetchSimilarToFavorites({
+          favorites,
+          forceRefresh: similarForceRefresh,
+          signal: controller.signal,
+        });
+        if (active) {
+          setSimilarItems(items);
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || !active) return;
+        setSimilarError(err?.message || 'Could not load similar species right now.');
+        setSimilarItems([]);
+      } finally {
+        if (active) {
+          setSimilarLoading(false);
+          setSimilarForceRefresh(false);
+        }
+      }
+    }
+
+    loadSimilar();
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [favoritesKey, similarRefreshTick]);
+
+  const dismissedSet = useMemo(() => new Set(notInterestedIds), [notInterestedIds]);
+
+  const visibleForYouItems = useMemo(
+    () => forYouItems.filter((item) => !dismissedSet.has(item.taxonId)),
+    [forYouItems, dismissedSet]
+  );
+
+  const visibleSimilarItems = useMemo(
+    () => similarItems.filter((item) => !dismissedSet.has(item.taxonId)),
+    [similarItems, dismissedSet]
+  );
+
+  const handleAddToCollection = useCallback(
+    async (item: ForYouSpeciesItem) => {
+      if (!currentUser) {
+        showToast('Sign in to save species to your Collection.');
+        setAuthModalOpen(true);
+        return;
+      }
+
+      if (addingTaxonId !== null) return;
+      setAddingTaxonId(item.taxonId);
+
+      try {
+        const scanResult = buildScanResultFromForYou(item);
+        const photoDataUrl =
+          item.photoUrl ||
+          generateFallbackSpecimenDataUrl(item.commonName, item.scientificName);
+
+        await addSpecimenToSupabase({
+          userId: currentUser.id,
+          scanResult,
+          photoDataUrl,
+          includeLocation: false,
+        });
+
+        setAddedSciNames((prev) => {
+          const next = new Set(prev);
+          next.add(item.scientificName.trim().toLowerCase());
+          return next;
+        });
+        showToast(`Added ${item.commonName} to Collection`);
+      } catch (err: any) {
+        console.error('Failed to add species to collection:', err);
+        showToast(err?.message || 'Could not save to Collection. Please try again.');
+      } finally {
+        setAddingTaxonId(null);
+      }
+    },
+    [currentUser, addingTaxonId, setAuthModalOpen]
+  );
+
+  const handleNotInterested = useCallback(
+    async (item: ForYouSpeciesItem) => {
+      try {
+        await dismissSpeciesInterest(item.taxonId);
+        showToast(`Hid ${item.commonName} from your suggestions`);
+      } catch (err: any) {
+        console.error('Failed to save not interested:', err);
+        showToast(err?.message || 'Could not save your preference.');
+      }
+    },
+    [dismissSpeciesInterest]
+  );
+
+  const handleResetHidden = useCallback(async () => {
+    try {
+      await resetDismissedSpecies();
+      showToast('Hidden suggestions restored');
+    } catch (err: any) {
+      console.error('Failed to reset hidden suggestions:', err);
+      showToast(err?.message || 'Could not restore hidden suggestions.');
+    }
+  }, [resetDismissedSpecies]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,22 +262,28 @@ export const HomePage: React.FC = () => {
   const getGreeting = () => {
     const hour = new Date().getHours();
     const timeGreeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    const name = userProfile?.displayName || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Explorer';
+    const name =
+      userProfile?.displayName ||
+      currentUser?.displayName ||
+      currentUser?.email?.split('@')[0] ||
+      'Explorer';
     const firstName = name.split(' ')[0];
     return `${timeGreeting}, ${firstName}`;
   };
 
   return (
-    <div className="flex flex-col w-full relative">
+    <div className="flex flex-col w-full relative pb-12">
       {/* Toast Notification */}
       {toastMessage && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2 animate-bounce">
-          <span className="material-symbols-outlined text-[18px] text-primary-fixed">verified</span>
-          <span>{toastMessage}</span>
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2 max-w-[90vw]">
+          <span className="material-symbols-outlined text-[18px] text-primary-fixed shrink-0">
+            verified
+          </span>
+          <span className="truncate">{toastMessage}</span>
         </div>
       )}
 
-      {/* Top Greeting & Live Search Context */}
+      {/* Top Greeting & Live Search */}
       <section className="px-3 sm:px-margin pt-3 pb-space-sm flex flex-col gap-space-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-col min-w-0">
@@ -74,584 +291,332 @@ export const HomePage: React.FC = () => {
               {getGreeting()} <span>🌿</span>
             </h1>
             <p className="font-body-md text-body-md text-on-surface-variant">
-              What will you discover today?
+              Discover real species tailored to what you love.
             </p>
           </div>
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-secondary-container/50 text-on-secondary-container shrink-0">
-            <span
-              className="material-symbols-outlined text-[16px] text-secondary animate-pulse"
-              style={{ fontVariationSettings: "'FILL' 1" }}
+          {currentUser && (
+            <Link
+              to="/onboarding?edit=1"
+              className="inline-flex items-center gap-1.5 px-3 min-h-[40px] rounded-full bg-surface-container hover:bg-surface-container-high text-primary font-label-sm text-label-sm font-semibold shrink-0 transition-colors"
             >
-              sensors
-            </span>
-            <span className="font-label-sm text-label-sm font-semibold tracking-wide uppercase">Field Mode</span>
-          </div>
+              <span className="material-symbols-outlined text-[16px]">tune</span>
+              <span>Edit interests &amp; area</span>
+            </Link>
+          )}
         </div>
 
-        {/* Search Field with Tactile Filter Trigger */}
+        {/* Search Field */}
         <form onSubmit={handleSearchSubmit} className="relative flex items-center w-full mt-1">
           <div className="absolute left-3.5 flex items-center pointer-events-none text-on-surface-variant">
             <span className="material-symbols-outlined text-[22px]">search</span>
           </div>
           <input
             className="w-full h-12 pl-11 pr-14 rounded-full bg-surface-container text-on-surface placeholder:text-on-surface-variant/70 font-body-md text-body-md shadow-sm focus:outline-none focus:bg-surface-container-lowest transition-all"
-            placeholder="Search 45,000+ species, habitats, fungi..."
+            placeholder="Search real species, habitats, fungi..."
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
           <button
-            aria-label="Open Advanced Taxonomic Filters"
+            aria-label="Open Explore filters"
             className="absolute right-1.5 w-9 h-9 rounded-full bg-primary text-on-primary flex items-center justify-center shadow-md active:scale-95 transition-transform"
             type="button"
             onClick={() => navigate('/explore')}
           >
-            <span className="material-symbols-outlined text-[18px]">tune</span>
-            <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-tertiary"></span>
+            <span className="material-symbols-outlined text-[18px]">explore</span>
           </button>
         </form>
       </section>
 
-      {/* Species of the Day (Immersive Hero Card) */}
-      <section className="px-3 sm:px-margin py-space-sm">
-        <div className="relative w-full rounded-2xl overflow-hidden shadow-md bg-surface-container-low flex flex-col">
-          {/* Media Box with Scrim */}
-          <div className="relative w-full h-64 overflow-hidden">
-            <img
-              className="w-full h-full object-cover"
-              alt={speciesOfDay.commonName}
-              src={speciesOfDay.photoUrl}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-inverse-surface/95 via-inverse-surface/40 to-transparent"></div>
-
-            {/* Floating Status Badges */}
-            <div className="absolute top-3 inset-x-3 flex flex-wrap items-center justify-between gap-1.5">
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-tertiary-fixed text-on-tertiary-fixed backdrop-blur-md shadow-sm">
-                <span className="material-symbols-outlined text-[15px]" style={{ fontVariationSettings: "'FILL' 1" }}>
-                  star
-                </span>
-                <span className="font-label-sm text-label-sm font-bold uppercase tracking-wider">
-                  Species of the Day
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-tertiary text-on-tertiary font-label-sm text-label-sm font-semibold tracking-wide">
-                  <span>{formatConservationStatus(speciesOfDay.conservationStatus || speciesOfDay.statusLabel)}</span>
-                  <InfoTooltip text={getConservationMeaning(speciesOfDay.conservationStatus)} />
-                </span>
-                <button
-                  aria-label="Bookmark species"
-                  className={`w-9 h-9 rounded-full bg-inverse-surface/60 backdrop-blur-md flex items-center justify-center active:scale-90 transition-all ${
-                    bookmarked ? 'text-tertiary' : 'text-surface-container-lowest'
-                  }`}
-                  onClick={() => {
-                    setBookmarked(!bookmarked);
-                    showToast(bookmarked ? 'Removed from collection' : 'Saved to My Collection');
-                  }}
-                  type="button"
-                >
-                  <span
-                    className="material-symbols-outlined text-[20px]"
-                    style={{ fontVariationSettings: bookmarked ? "'FILL' 1" : "'FILL' 0" }}
-                  >
-                    bookmark
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            {/* Overlaid Titles */}
-            <div className="absolute bottom-3 inset-x-3.5 flex flex-col">
-              <div className="flex items-center gap-1 text-primary-fixed-dim">
-                <span className="font-label-sm text-label-sm uppercase font-semibold tracking-wider">
-                  Group: {speciesOfDay.taxonomy.order || 'Carnivora'} • {speciesOfDay.taxonomy.family || 'Felidae'}
-                </span>
-              </div>
-              <h2 className="font-headline-lg text-headline-lg text-surface-container-lowest tracking-tight leading-tight drop-shadow-sm">
-                {speciesOfDay.commonName}
-              </h2>
-              <div className="flex items-center gap-1 -mt-0.5">
-                <span className="text-[10px] uppercase font-bold text-surface-variant/90 tracking-wider">Science name:</span>
-                <span className="font-body-sm text-body-sm text-surface-variant italic opacity-95">
-                  {speciesOfDay.scientificName}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Hero Card Details & Meta Bar */}
-          <div className="p-space-md flex flex-col gap-3 bg-surface-container-low text-on-surface">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-secondary-container/40 text-on-secondary-container font-label-sm text-label-sm">
-                <span className="material-symbols-outlined text-[15px]">forest</span>
-                <span>{speciesOfDay.habitat}</span>
-              </div>
-              <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm">
-                <span className="material-symbols-outlined text-[15px] text-tertiary">warning</span>
-                <span>How Rare: {speciesOfDay.rarity}</span>
-              </div>
-              {speciesOfDay.population && (
-                <div className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm">
-                  <span className="material-symbols-outlined text-[15px] text-primary">public</span>
-                  <span>Living in Wild: {speciesOfDay.population}</span>
-                </div>
-              )}
-            </div>
-            <p className="font-body-sm text-body-sm text-on-surface-variant line-clamp-2">
-              {speciesOfDay.description}
+      {/* FOR YOU SECTION */}
+      <section className="px-3 sm:px-margin py-space-sm flex flex-col gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div className="flex flex-col min-w-0">
+            <h2 className="font-headline-sm text-headline-sm text-primary font-bold flex items-center gap-1.5">
+              <span>For You</span>
+              <span className="material-symbols-outlined text-[20px] text-secondary">
+                {hasLocation ? 'location_on' : 'public'}
+              </span>
+            </h2>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              {hasLocation
+                ? 'Seen near you (within 50 km) from your chosen groups'
+                : 'Popular species worldwide in your chosen groups'}
             </p>
-            <div className="pt-1 flex items-center justify-between gap-3">
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {!hasLocation && currentUser && (
               <Link
-                className="flex-1 h-11 px-5 rounded-full bg-primary text-on-primary font-label-lg text-label-lg flex items-center justify-center gap-2 shadow-sm active:scale-98 transition-all hover:bg-primary-container"
-                to={`/species/${speciesOfDay.id}`}
+                to="/onboarding?edit=1"
+                className="px-3 min-h-[36px] rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold inline-flex items-center gap-1 hover:opacity-95"
               >
-                <span>View Details</span>
-                <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                <span className="material-symbols-outlined text-[15px]">add_location</span>
+                <span>Add area</span>
               </Link>
-              <button
-                aria-label="Add observation note"
-                className="w-11 h-11 rounded-full bg-surface-container-high text-on-surface flex items-center justify-center active:scale-95 transition-transform hover:bg-surface-container-highest"
-                type="button"
-                onClick={() => showToast('GPS pinned at current trail coordinates')}
-              >
-                <span className="material-symbols-outlined text-[20px]">add_location_alt</span>
-              </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setForYouForceRefresh(true);
+                setForYouRefreshTick((t) => t + 1);
+              }}
+              aria-label="Refresh For You suggestions"
+              className="w-9 h-9 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface-variant flex items-center justify-center transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]">refresh</span>
+            </button>
           </div>
         </div>
-      </section>
 
-      {/* Category Chips (Wrap on mobile, Horizontal Scroll on desktop) */}
-      <section className="py-space-sm flex flex-col gap-2">
-        <div className="px-3 sm:px-margin flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-headline-sm text-headline-sm text-primary">Explore Groups</h3>
-          <Link
-            className="font-label-sm text-label-sm text-secondary font-semibold hover:underline"
-            to="/explore"
-          >
-            Family Tree
-          </Link>
-        </div>
-        <div className="flex flex-wrap md:flex-nowrap items-center gap-2 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
-          {categories.map((cat) => {
-            const isActive = selectedCategory === cat.id;
-            return (
-              <button
-                key={cat.id}
-                onClick={() => setSelectedCategory(cat.id)}
-                className={`shrink-0 h-11 px-3 sm:px-4 rounded-full flex items-center gap-1.5 sm:gap-2 shadow-sm font-label-md text-label-md active:scale-95 transition-all ${
-                  isActive
-                    ? 'bg-primary text-on-primary'
-                    : 'bg-surface-container-high text-on-surface hover:bg-surface-container-highest'
-                }`}
-                type="button"
+        {/* Active Interests Chips */}
+        {interests.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {interests.map((group) => (
+              <span
+                key={group}
+                className="px-2.5 py-1 rounded-full bg-secondary-container/45 text-on-secondary-container font-label-sm text-label-sm font-semibold"
               >
-                <span>{cat.icon} {cat.label}</span>
-                <span
-                  className={`px-1.5 py-0.5 rounded-full font-label-sm text-label-sm ${
-                    isActive
-                      ? 'bg-on-primary-container text-primary font-bold'
-                      : 'bg-surface-container text-on-surface-variant'
-                  }`}
-                >
-                  {cat.count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {/* Quick Action Shortcuts (Stack on narrow mobile, 2x2 Grid on sm+) */}
-      <section className="px-3 sm:px-margin py-space-sm">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-space-sm">
-          {/* AI Photo Scanner */}
-          <Link
-            className="p-space-md rounded-2xl bg-surface-container-high hover:bg-surface-container-highest flex flex-col justify-between gap-3 shadow-sm active:scale-98 transition-all min-h-[120px]"
-            to="/scan"
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center">
-                <span className="material-symbols-outlined text-[22px]">photo_camera</span>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-secondary/15 text-secondary font-label-sm text-label-sm font-bold uppercase">
-                99% Match
+                {group}
               </span>
-            </div>
-            <div>
-              <h4 className="font-headline-sm text-headline-sm text-on-surface">AI Scanner</h4>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">Identify plants & animals</p>
-            </div>
-          </Link>
+            ))}
+          </div>
+        )}
 
-          {/* Health Help */}
-          <Link
-            className="p-space-md rounded-2xl bg-surface-container-high hover:bg-surface-container-highest flex flex-col justify-between gap-3 shadow-sm active:scale-98 transition-all min-h-[120px]"
-            to="/health"
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-10 h-10 rounded-full bg-tertiary-fixed text-on-tertiary-fixed flex items-center justify-center">
-                <span className="material-symbols-outlined text-[22px]">healing</span>
+        {/* Loading Skeletons */}
+        {forYouLoading && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {[1, 2, 3, 4, 5, 6].map((n) => (
+              <div
+                key={n}
+                className="rounded-2xl bg-surface-container-low border border-outline-variant/20 overflow-hidden animate-pulse flex flex-col"
+              >
+                <div className="w-full h-40 bg-surface-container-high" />
+                <div className="p-3 space-y-2.5">
+                  <div className="h-5 w-2/3 rounded bg-surface-container-high" />
+                  <div className="h-3.5 w-1/2 rounded bg-surface-container-high" />
+                  <div className="h-10 w-full rounded-full bg-surface-container-high mt-2" />
+                  <div className="h-9 w-full rounded-full bg-surface-container" />
+                </div>
               </div>
-              <span className="px-2 py-0.5 rounded-full bg-tertiary/15 text-tertiary font-label-sm text-label-sm font-semibold">
-                Care Tips
-              </span>
-            </div>
-            <div>
-              <h4 className="font-headline-sm text-headline-sm text-on-surface">Health Help</h4>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">Plant & animal health</p>
-            </div>
-          </Link>
+            ))}
+          </div>
+        )}
 
-          {/* How It Grows */}
-          <Link
-            className="p-space-md rounded-2xl bg-surface-container-high hover:bg-surface-container-highest flex flex-col justify-between gap-3 shadow-sm active:scale-98 transition-all min-h-[120px]"
-            to="/lifecycle"
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center">
-                <span className="material-symbols-outlined text-[22px]">published_with_changes</span>
-              </div>
-              <span className="px-2 py-0.5 rounded-full bg-primary-container/20 text-primary font-label-sm text-label-sm font-semibold">
-                Interactive
+        {/* Error State with Retry */}
+        {!forYouLoading && forYouError && (
+          <div className="p-4 rounded-2xl bg-error-container/25 border border-error/40 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+              <span className="material-symbols-outlined text-[20px] text-error shrink-0 mt-0.5">
+                error
               </span>
+              <p className="font-body-sm text-body-sm text-error">{forYouError}</p>
             </div>
-            <div>
-              <h4 className="font-headline-sm text-headline-sm text-on-surface">How It Grows</h4>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">How living things grow</p>
-            </div>
-          </Link>
+            <button
+              type="button"
+              onClick={() => {
+                setForYouForceRefresh(true);
+                setForYouRefreshTick((t) => t + 1);
+              }}
+              className="px-4 min-h-[44px] rounded-full bg-error text-on-error font-label-md text-label-md font-bold shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
-          {/* Field Audio Match */}
-          <button
-            onClick={() => {
-              setAudioMatchActive(true);
-              setAudioListening(true);
-              setTimeout(() => {
-                setAudioListening(false);
-                showToast('Acoustic match detected: Pacific Tree Frog (94.2%)');
-              }, 2500);
-            }}
-            className="p-space-md rounded-2xl bg-surface-container-high hover:bg-surface-container-highest flex flex-col justify-between gap-3 shadow-sm active:scale-98 transition-all min-h-[120px] text-left"
-            type="button"
-          >
-            <div className="flex items-center justify-between">
-              <div className="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center">
-                <span className="material-symbols-outlined text-[22px]">mic</span>
-              </div>
-              <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-secondary"></span>
-              </span>
+        {/* Empty State */}
+        {!forYouLoading && !forYouError && visibleForYouItems.length === 0 && (
+          <div className="p-5 rounded-2xl bg-surface-container-low border border-outline-variant/25 text-center space-y-3">
+            <div className="w-12 h-12 rounded-full bg-secondary-container/40 text-secondary mx-auto flex items-center justify-center">
+              <span className="material-symbols-outlined text-[24px]">travel_explore</span>
             </div>
-            <div>
-              <h4 className="font-headline-sm text-headline-sm text-on-surface">Audio Match</h4>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">Birdsong & calls</p>
-            </div>
-          </button>
-        </div>
-      </section>
-
-      {/* Audio Match Modal Sheet */}
-      {audioMatchActive && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
-          <div className="w-full max-w-sm rounded-3xl bg-surface-container p-6 shadow-2xl flex flex-col items-center text-center gap-4 animate-in fade-in slide-in-from-bottom-6">
-            <div className="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center text-secondary relative">
-              <span className="material-symbols-outlined text-[32px] animate-pulse">mic</span>
-              {audioListening && (
-                <span className="absolute inset-0 rounded-full border-2 border-secondary animate-ping"></span>
-              )}
-            </div>
-            <div>
-              <h3 className="font-headline-sm text-headline-sm text-on-surface">
-                {audioListening ? 'Listening for Bio-Acoustics...' : 'Field Audio Match Complete'}
+            <div className="space-y-1 max-w-md mx-auto">
+              <h3 className="font-headline-sm text-headline-sm text-on-surface font-bold">
+                No species to show right now
               </h3>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">
-                {audioListening
-                  ? 'Isolating environmental noise and comparing against 12,000 recorded wildlife vocalizations.'
-                  : 'Pacific Tree Frog (Pseudacris regilla) vocal chorus verified with 94.2% confidence.'}
+              <p className="font-body-sm text-body-sm text-on-surface-variant">
+                {forYouItems.length > 0 && dismissedSet.size > 0
+                  ? 'You hid all current matches for your groups.'
+                  : 'Try picking more groups or updating your area to see more local wildlife.'}
               </p>
             </div>
-            <button
-              onClick={() => setAudioMatchActive(false)}
-              className="w-full h-11 rounded-full bg-primary text-on-primary font-label-md text-label-md font-semibold active:scale-95"
-            >
-              Done
-            </button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {forYouItems.length > 0 && dismissedSet.size > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetHidden}
+                  className="px-4 min-h-[44px] rounded-full bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-md text-label-md font-semibold"
+                >
+                  Show hidden species
+                </button>
+              )}
+              <Link
+                to={currentUser ? '/onboarding?edit=1' : '/explore'}
+                className="px-4 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-bold inline-flex items-center gap-1.5"
+              >
+                <span>{currentUser ? 'Edit interests & area' : 'Browse Explore'}</span>
+              </Link>
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Trending Discoveries Carousel */}
-      <section className="py-space-sm flex flex-col gap-2.5">
+        {/* Results Grid */}
+        {!forYouLoading && !forYouError && visibleForYouItems.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {visibleForYouItems.map((item) => (
+              <ForYouSpeciesCard
+                key={item.taxonId}
+                item={item}
+                layout="grid"
+                isAdding={addingTaxonId === item.taxonId}
+                isAdded={addedSciNames.has(item.scientificName.trim().toLowerCase())}
+                onAddToCollection={handleAddToCollection}
+                onNotInterested={handleNotInterested}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* SIMILAR TO YOUR FAVORITES ROW */}
+      <section className="py-space-sm flex flex-col gap-3 mt-2">
         <div className="px-3 sm:px-margin flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-col min-w-0">
-            <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-1.5">
-              <span>Trending Discoveries</span>
-              <span className="material-symbols-outlined text-[18px] text-tertiary">local_fire_department</span>
-            </h3>
-            <span className="font-body-sm text-body-sm text-on-surface-variant">
-              Active field observations nearby
-            </span>
+            <h2 className="font-headline-sm text-headline-sm text-primary font-bold flex items-center gap-1.5">
+              <span>Similar to your favorites</span>
+              <span className="material-symbols-outlined text-[20px] text-secondary">
+                account_tree
+              </span>
+            </h2>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              Species from the same genus or family as your favorites
+            </p>
           </div>
-          <Link
-            className="font-label-sm text-label-sm text-secondary font-semibold hover:underline shrink-0"
-            to="/explore"
-          >
-            See All ({trendingSpecies.length + 138})
-          </Link>
+          {favorites.length > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                setSimilarForceRefresh(true);
+                setSimilarRefreshTick((t) => t + 1);
+              }}
+              aria-label="Refresh similar species"
+              className="w-9 h-9 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface-variant flex items-center justify-center shrink-0 transition-colors"
+            >
+              <span className="material-symbols-outlined text-[18px]">refresh</span>
+            </button>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:items-center gap-3.5 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
-          {trendingSpecies.map((sp) => (
-            <div
-              key={sp.id}
-              className="w-full md:shrink-0 md:w-64 rounded-2xl bg-surface-container-low overflow-hidden shadow-sm flex flex-col hover:shadow-md transition-shadow"
-            >
-              <div className="relative w-full h-36">
-                <img className="w-full h-full object-cover" alt={sp.commonName} src={sp.photoUrl} />
-                <div className="absolute inset-0 bg-gradient-to-t from-inverse-surface/85 via-transparent to-transparent"></div>
-                <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-surface/90 text-primary font-label-sm text-label-sm font-semibold backdrop-blur-sm capitalize">
-                  {sp.category}
-                </span>
-                <span
-                  className={`absolute top-2 right-2 px-2 py-0.5 rounded-full font-label-sm text-label-sm font-bold ${
-                    sp.conservationStatus === 'EN' || sp.conservationStatus === 'CR'
-                      ? 'bg-tertiary text-on-tertiary'
-                      : sp.conservationStatus === 'VU'
-                      ? 'bg-tertiary-fixed text-on-tertiary-fixed'
-                      : 'bg-secondary text-on-secondary'
-                  }`}
-                >
-                  {sp.statusLabel.split(' ')[0]}
-                </span>
-                <div className="absolute bottom-2 left-2 right-2 flex items-baseline justify-between text-surface-container-lowest">
-                  <span className="font-label-sm text-label-sm opacity-90 truncate max-w-[120px]">
-                    {sp.habitat}
-                  </span>
-                  <span className="font-label-sm text-label-sm text-secondary-fixed font-semibold">
-                    128 logged
-                  </span>
+        {/* No favorites saved yet */}
+        {favorites.length === 0 ? (
+          <div className="px-3 sm:px-margin">
+            <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/25 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="w-10 h-10 rounded-full bg-secondary-container/40 text-secondary flex items-center justify-center shrink-0">
+                  <span className="material-symbols-outlined text-[20px]">favorite</span>
                 </div>
-              </div>
-              <div className="p-3 flex flex-col gap-1.5">
-                <div>
-                  <h4 className="font-headline-sm text-headline-sm text-on-surface truncate">
-                    {sp.commonName}
-                  </h4>
-                  <p className="font-body-sm text-body-sm text-on-surface-variant italic truncate">
-                    {sp.scientificName}
+                <div className="min-w-0">
+                  <p className="font-label-lg text-label-lg font-bold text-on-surface">
+                    No favorite species picked yet
+                  </p>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant">
+                    Pick a few animals, plants, or mushrooms you like to see close relatives here.
                   </p>
                 </div>
-                <div className="flex items-center justify-between pt-1">
-                  <div className="flex items-center gap-1 text-on-surface-variant">
-                    <span className="material-symbols-outlined text-[16px] text-tertiary">favorite</span>
-                    <span className="font-label-sm text-label-sm">520</span>
-                  </div>
-                  <Link
-                    className="font-label-sm text-label-sm text-secondary font-semibold flex items-center gap-0.5 hover:underline"
-                    to={`/species/${sp.id}`}
-                  >
-                    <span>View</span>
-                    <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-                  </Link>
-                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Endangered Spotlight Banner */}
-      <section className="px-3 sm:px-margin py-space-sm">
-        <div className="p-3 sm:p-space-md rounded-2xl bg-tertiary-container text-on-tertiary-container relative overflow-hidden shadow-md flex flex-col gap-3">
-          <div className="absolute -right-12 -top-12 w-36 h-36 rounded-full bg-tertiary-fixed-dim/20 blur-2xl pointer-events-none"></div>
-          <div className="flex flex-wrap items-center justify-between gap-2 relative z-10">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-tertiary flex items-center justify-center text-on-tertiary">
-                <span className="material-symbols-outlined text-[18px]">emergency</span>
-              </div>
-              <span className="font-label-sm text-label-sm font-bold uppercase tracking-wider text-tertiary-fixed">
-                Wildlife In Danger
-              </span>
-            </div>
-            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-tertiary text-on-tertiary font-label-sm text-label-sm font-bold">
-              <span>IN SERIOUS DANGER</span>
-              <InfoTooltip text="Very few remain in the wild. They need immediate protection so they do not disappear forever." />
-            </span>
-          </div>
-          <div className="relative z-10 flex flex-col gap-1">
-            <h3 className="font-headline-md text-headline-md text-surface-container-lowest leading-tight">
-              Javan Rhino & Amur Leopard
-            </h3>
-            <p className="font-body-sm text-body-sm text-tertiary-fixed opacity-95">
-              Fewer than 76 Javan Rhinos and 120 Amur Leopards remain in the wild. Ranger patrols are actively protecting their habitats this week.
-            </p>
-          </div>
-          {/* Actions */}
-          <div className="relative z-10 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-            <button
-              onClick={() => showToast('Thank you for supporting wildlife protection!')}
-              className="flex-1 h-11 px-4 rounded-full bg-surface-container-lowest text-tertiary font-label-md text-label-md font-bold flex items-center justify-center gap-1.5 shadow-sm active:scale-95 transition-transform"
-              type="button"
-            >
-              <span className="material-symbols-outlined text-[18px]">verified_user</span>
-              <span>Help Protect Them</span>
-            </button>
-            <button
-              onClick={() => navigate('/scan')}
-              aria-label="Save Sighting"
-              className="h-11 px-3.5 rounded-full bg-tertiary text-on-tertiary font-label-md text-label-md flex items-center justify-center gap-1 active:scale-95 transition-transform"
-              type="button"
-            >
-              <span className="material-symbols-outlined text-[18px]">add_circle</span>
-              <span>Save Sighting</span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      {/* Community Activity Feed Preview */}
-      <section className="px-3 sm:px-margin pt-space-sm pb-space-lg flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-col">
-            <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-1">
-              <span>Community</span>
-              <span className="material-symbols-outlined text-[18px] text-secondary">groups</span>
-            </h3>
-            <span className="font-body-sm text-body-sm text-on-surface-variant">
-              Recent sightings from nature lovers near you
-            </span>
-          </div>
-          <Link
-            className="font-label-sm text-label-sm text-secondary font-semibold hover:underline"
-            to="/feed"
-          >
-            See Community
-          </Link>
-        </div>
-
-        {/* Social Observation Card */}
-        {MOCK_FEED_OBSERVATIONS.map((obs) => (
-          <div key={obs.id} className="p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col gap-3">
-            {/* User Info Header */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="relative w-10 h-10 rounded-full overflow-hidden bg-surface-container-high shrink-0">
-                  <img className="w-full h-full object-cover" alt={obs.userName} src={obs.userAvatar} />
-                </div>
-                <div className="flex flex-col min-w-0">
-                  <span className="font-headline-sm text-headline-sm text-on-surface leading-snug truncate">
-                    {obs.userName}
-                  </span>
-                  <div className="flex items-center gap-1 text-on-surface-variant">
-                    <span className="material-symbols-outlined text-[13px] text-secondary">pin_drop</span>
-                    <span className="font-label-sm text-label-sm truncate">{obs.locationName}</span>
-                  </div>
-                </div>
-              </div>
-              <button
-                aria-label="Card options"
-                className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container"
-                type="button"
-                onClick={() => showToast('Observation shared to clipboard')}
+              <Link
+                to={currentUser ? '/onboarding?edit=1' : '/explore'}
+                className="px-4 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-bold inline-flex items-center gap-1.5 shrink-0"
               >
-                <span className="material-symbols-outlined text-[20px]">more_vert</span>
-              </button>
+                <span>{currentUser ? 'Pick favorites' : 'Explore species'}</span>
+              </Link>
             </div>
-
-            {/* Sighting Media & Confidence HUD */}
-            <div className="relative w-full h-44 rounded-xl overflow-hidden">
-              <img className="w-full h-full object-cover" alt={obs.speciesName} src={obs.photoUrl} />
-              <div className="absolute bottom-2 left-2 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-lowest/90 backdrop-blur-md shadow-sm text-on-surface">
-                <span className="material-symbols-outlined text-[15px] text-secondary">verified</span>
-                <span className="font-label-sm text-label-sm font-semibold">{obs.aiMatchScore}% Match Score</span>
-                <InfoTooltip text={`We are ${obs.aiMatchScore}% sure this is a ${obs.speciesName}.`} />
+          </div>
+        ) : similarLoading ? (
+          /* Loading Skeletons for Similar Row */
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:items-stretch gap-3.5 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
+            {[1, 2, 3, 4].map((n) => (
+              <div
+                key={n}
+                className="w-full md:w-72 md:shrink-0 rounded-2xl bg-surface-container-low border border-outline-variant/20 overflow-hidden animate-pulse flex flex-col"
+              >
+                <div className="w-full h-40 bg-surface-container-high" />
+                <div className="p-3 space-y-2.5">
+                  <div className="h-5 w-2/3 rounded bg-surface-container-high" />
+                  <div className="h-3.5 w-1/2 rounded bg-surface-container-high" />
+                  <div className="h-10 w-full rounded-full bg-surface-container-high mt-2" />
+                  <div className="h-9 w-full rounded-full bg-surface-container" />
+                </div>
               </div>
-            </div>
-
-            {/* Observation Title & Description */}
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center justify-between">
-                <h4 className="font-headline-sm text-headline-sm text-on-surface">{obs.speciesName}</h4>
-                <span className="font-label-sm text-label-sm px-2 py-0.5 rounded-full bg-secondary-container/50 text-on-secondary-container font-semibold">
-                  Local Wildlife
+            ))}
+          </div>
+        ) : similarError ? (
+          /* Error State with Retry */
+          <div className="px-3 sm:px-margin">
+            <div className="p-4 rounded-2xl bg-error-container/25 border border-error/40 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                <span className="material-symbols-outlined text-[20px] text-error shrink-0 mt-0.5">
+                  error
                 </span>
+                <p className="font-body-sm text-body-sm text-error">{similarError}</p>
               </div>
-              <div className="flex items-center gap-1">
-                <span className="text-[10px] uppercase font-bold text-outline">Science name:</span>
-                <p className="font-body-sm text-body-sm text-on-surface-variant italic">{obs.scientificName}</p>
-              </div>
-              <p className="font-body-md text-body-md text-on-surface mt-1">{obs.caption}</p>
-            </div>
-
-            {/* Social Interaction Row */}
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
-              <div className="flex items-center gap-2">
-                {/* Leaf Clap micro-action */}
-                <button
-                  className={`h-9 px-3 rounded-full flex items-center gap-1.5 font-label-sm text-label-sm active:scale-90 transition-transform ${
-                    hasClapped
-                      ? 'bg-secondary-container text-on-secondary-container font-bold'
-                      : 'bg-surface-container hover:bg-surface-container-high text-on-surface'
-                  }`}
-                  onClick={() => {
-                    setHasClapped(!hasClapped);
-                    setClapsCount(hasClapped ? clapsCount - 1 : clapsCount + 1);
-                  }}
-                  type="button"
-                >
-                  <span className="material-symbols-outlined text-[18px]">eco</span>
-                  <span>{clapsCount}</span>
-                </button>
-                {/* Comment Action */}
-                <button
-                  className="h-9 px-3 rounded-full bg-surface-container hover:bg-surface-container-high flex items-center gap-1.5 text-on-surface font-label-sm text-label-sm active:scale-95 transition-transform"
-                  type="button"
-                  onClick={() => showToast('Opening discussion thread...')}
-                >
-                  <span className="material-symbols-outlined text-[18px]">chat_bubble_outline</span>
-                  <span>{obs.commentsCount}</span>
-                </button>
-              </div>
-
-              {/* Add to Wishlist / Log Encounter */}
               <button
-                className={`h-9 px-3 rounded-full flex items-center gap-1 font-label-sm text-label-sm font-semibold active:scale-95 transition-all ${
-                  wishlisted
-                    ? 'bg-secondary-container text-on-secondary-container'
-                    : 'bg-surface-container-high text-on-surface hover:text-primary'
-                }`}
-                onClick={() => {
-                  setWishlisted(!wishlisted);
-                  showToast(wishlisted ? 'Removed from wishlist' : 'Added to naturalist wishlist!');
-                }}
                 type="button"
+                onClick={() => {
+                  setSimilarForceRefresh(true);
+                  setSimilarRefreshTick((t) => t + 1);
+                }}
+                className="px-4 min-h-[44px] rounded-full bg-error text-on-error font-label-md text-label-md font-bold shrink-0"
               >
-                <span className="material-symbols-outlined text-[18px]">bookmark_add</span>
-                <span>{wishlisted ? 'Wishlisted' : 'Add to Wishlist'}</span>
+                Retry
               </button>
             </div>
           </div>
-        ))}
-
-        {/* Field Naturalist Discovery Pill */}
-        <div className="p-3 rounded-2xl bg-secondary-container/30 flex items-center justify-between gap-2 mt-1">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-full bg-secondary text-on-secondary flex items-center justify-center shrink-0">
-              <span className="material-symbols-outlined text-[18px]">explore_nearby</span>
+        ) : visibleSimilarItems.length === 0 ? (
+          /* Empty State */
+          <div className="px-3 sm:px-margin">
+            <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/25 flex flex-wrap items-center justify-between gap-3">
+              <p className="font-body-sm text-body-sm text-on-surface-variant">
+                {similarItems.length > 0 && dismissedSet.size > 0
+                  ? 'All similar species are currently hidden.'
+                  : 'No closely related species found for your current favorites.'}
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {similarItems.length > 0 && dismissedSet.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleResetHidden}
+                    className="px-3.5 min-h-[40px] rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm font-semibold"
+                  >
+                    Show hidden species
+                  </button>
+                )}
+                <Link
+                  to="/onboarding?edit=1"
+                  className="px-3.5 min-h-[40px] rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold inline-flex items-center"
+                >
+                  Update favorites
+                </Link>
+              </div>
             </div>
-            <p className="font-label-sm text-label-sm text-on-secondary-container font-medium truncate">
-              18 field naturalists active near Olympic Peninsula today
-            </p>
           </div>
-          <Link
-            to="/invite"
-            className="shrink-0 px-3 py-1.5 rounded-full bg-secondary text-on-secondary font-label-sm text-label-sm font-semibold shadow-xs active:scale-95 transition-transform"
-          >
-            Connect
-          </Link>
-        </div>
+        ) : (
+          /* Horizontal Scroll Row on Desktop, Responsive Grid on Mobile */
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:items-stretch gap-3.5 md:overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
+            {visibleSimilarItems.map((item) => (
+              <ForYouSpeciesCard
+                key={`sim-${item.taxonId}`}
+                item={item}
+                layout="row"
+                isAdding={addingTaxonId === item.taxonId}
+                isAdded={addedSciNames.has(item.scientificName.trim().toLowerCase())}
+                onAddToCollection={handleAddToCollection}
+                onNotInterested={handleNotInterested}
+              />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

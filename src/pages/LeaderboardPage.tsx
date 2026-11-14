@@ -39,7 +39,7 @@ export const LeaderboardPage: React.FC = () => {
         >
           <span className="material-symbols-outlined text-[20px]">arrow_back</span>
         </button>
-        <span className="font-headline-sm text-headline-sm text-primary font-bold">BioBlitz League</span>
+        <span className="font-headline-sm text-headline-sm text-primary font-bold">Weekly Challenge</span>
         <div className="w-10"></div>
       </div>
 

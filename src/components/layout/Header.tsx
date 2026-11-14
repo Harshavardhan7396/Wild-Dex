@@ -7,34 +7,73 @@ interface HeaderProps {
   locationName?: string;
 }
 
+export interface NavItem {
+  to: string;
+  label: string;
+  icon: string;
+  tier: 'primary' | 'secondary' | 'more' | 'account';
+}
+
+export const ALL_NAV_ITEMS: NavItem[] = [
+  { to: '/', label: 'Home', icon: 'home', tier: 'primary' },
+  { to: '/explore', label: 'Explore', icon: 'explore', tier: 'primary' },
+  { to: '/compare', label: 'Compare', icon: 'compare_arrows', tier: 'primary' },
+  { to: '/health', label: 'Health Help', icon: 'healing', tier: 'primary' },
+  { to: '/lifecycle', label: 'How It Grows', icon: 'timelapse', tier: 'secondary' },
+  { to: '/collection', label: 'My Collection', icon: 'bookmarks', tier: 'secondary' },
+  { to: '/feed', label: 'Community', icon: 'dynamic_feed', tier: 'secondary' },
+  { to: '/nearby', label: 'Nearby', icon: 'near_me', tier: 'more' },
+  { to: '/shared-collection', label: 'Shared Collection', icon: 'group_work', tier: 'more' },
+  { to: '/leaderboard', label: 'Weekly Challenge', icon: 'trophy', tier: 'more' },
+  { to: '/profile', label: 'Profile', icon: 'person', tier: 'account' },
+  { to: '/settings', label: 'Settings', icon: 'settings', tier: 'more' },
+];
+
 export const Header: React.FC<HeaderProps> = ({
   title,
   locationName = 'Pacific Northwest',
 }) => {
   const location = useLocation();
-  const { currentUser, userProfile, setAuthModalOpen } = useAuth();
+  const { currentUser, userProfile, setAuthModalOpen, logout } = useAuth();
   const displayName = userProfile?.displayName || currentUser?.displayName || 'Explorer';
+  const emailText = currentUser?.email || userProfile?.email;
   const avatarUrl = userProfile?.photoURL || currentUser?.photoURL;
   const [moreOpen, setMoreOpen] = useState(false);
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const moreDropdownRef = useRef<HTMLDivElement | null>(null);
+  const avatarMenuRef = useRef<HTMLDivElement | null>(null);
   const hamburgerBtnRef = useRef<HTMLButtonElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // Close dropdown on outside click
+  // Close dropdowns on outside click or Escape key
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (moreDropdownRef.current && !moreDropdownRef.current.contains(e.target as Node)) {
         setMoreOpen(false);
       }
+      if (avatarMenuRef.current && !avatarMenuRef.current.contains(e.target as Node)) {
+        setAvatarMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setMoreOpen(false);
+        setAvatarMenuOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   // Close menus on route change
   useEffect(() => {
     setMoreOpen(false);
+    setAvatarMenuOpen(false);
     setMobileMenuOpen(false);
   }, [location.pathname, location.search]);
 
@@ -70,78 +109,30 @@ export const Header: React.FC<HeaderProps> = ({
 
   const getPageTitle = () => {
     if (title) return title;
-    switch (location.pathname) {
-      case '/':
-        return 'Home';
-      case '/explore':
-        return 'Explore';
-      case '/compare':
-        return 'Compare';
-      case '/lifecycle':
-        return 'How It Grows';
-      case '/health':
-        return 'Health Help';
-      case '/collection':
-        return 'My Collection';
-      case '/profile':
-        return 'Profile';
-      case '/feed':
-        return 'Community';
-      case '/invite':
-        return 'Invite Friends';
-      case '/shared-collection':
-        return 'Shared Collection';
-      case '/leaderboard':
-        return 'Weekly Challenge';
-      case '/settings':
-        return 'Settings';
-      case '/onboarding':
-        return 'Welcome';
-      default:
-        if (location.pathname.startsWith('/species/')) return 'Animal or Plant';
-        return 'Home';
-    }
+    const matchedNav = ALL_NAV_ITEMS.find((item) =>
+      item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to)
+    );
+    if (matchedNav) return matchedNav.label;
+    if (location.pathname === '/invite') return 'Invite Friends';
+    if (location.pathname === '/onboarding') return 'Welcome';
+    if (location.pathname.startsWith('/species/')) return 'Animal or Plant';
+    return 'Home';
   };
 
   const pageTitle = getPageTitle();
 
-  // First 4 links shown on Medium (768px-1279px) and Desktop (1280px+)
-  const primaryLinks = [
-    { to: '/', label: 'Home' },
-    { to: '/explore', label: 'Explore' },
-    { to: '/compare', label: 'Compare' },
-    { to: '/health', label: 'Health Help' },
-  ];
+  const primaryLinks = ALL_NAV_ITEMS.filter((item) => item.tier === 'primary');
+  const secondaryLinks = ALL_NAV_ITEMS.filter((item) => item.tier === 'secondary');
+  const moreOnlyLinks = ALL_NAV_ITEMS.filter((item) => item.tier === 'more');
+  const moreDropdownLinks = [...secondaryLinks, ...moreOnlyLinks];
+  const avatarMenuLinks = ALL_NAV_ITEMS.filter(
+    (item) => item.to === '/profile' || item.to === '/settings'
+  );
 
-  // Secondary links: in "More" dropdown on Medium, and inline on Desktop (1280px+)
-  const overflowLinks = [
-    { to: '/lifecycle', label: 'How It Grows', icon: 'timelapse' },
-    { to: '/collection', label: 'My Collection', icon: 'bookmarks' },
-    { to: '/feed', label: 'Community', icon: 'dynamic_feed' },
-  ];
-
-  const extraMenuLinks = [
-    { to: '/shared-collection', label: 'Shared Collection', icon: 'group_work' },
-    { to: '/leaderboard', label: 'BioBlitz League', icon: 'trophy' },
-    { to: '/settings', label: 'Settings', icon: 'settings' },
-  ];
-
-  // Every page for mobile slide-in drawer
-  const mobileDrawerLinks = [
-    { to: '/', label: 'Home', icon: 'home' },
-    { to: '/explore', label: 'Explore', icon: 'explore' },
-    { to: '/compare', label: 'Compare', icon: 'compare_arrows' },
-    { to: '/health', label: 'Health Help', icon: 'healing' },
-    { to: '/lifecycle', label: 'How It Grows', icon: 'timelapse' },
-    { to: '/collection', label: 'My Collection', icon: 'bookmarks' },
-    { to: '/feed', label: 'Community', icon: 'dynamic_feed' },
-    { to: '/shared-collection', label: 'Shared Collection', icon: 'group_work' },
-    { to: '/leaderboard', label: 'Weekly Challenge', icon: 'trophy' },
-    { to: '/profile', label: 'Profile', icon: 'person' },
-    { to: '/settings', label: 'Settings', icon: 'settings' },
-  ];
-
-  const isOverflowActive = overflowLinks.concat(extraMenuLinks).some((l) =>
+  const isSecondaryRouteActive = secondaryLinks.some((l) =>
+    location.pathname.startsWith(l.to)
+  );
+  const isMoreOnlyRouteActive = moreOnlyLinks.some((l) =>
     location.pathname.startsWith(l.to)
   );
 
@@ -196,7 +187,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* GROUP 2: CENTER (Nav links hidden below 768px) */}
           <nav
-            className="hidden md:flex flex-1 min-w-0 items-center gap-4 font-label-md text-label-md"
+            className="hidden md:flex flex-1 min-w-0 items-center gap-3 xl:gap-4 font-label-md text-label-md"
             aria-label="Primary navigation"
           >
             {/* First 4 links (always visible on 768px and wider) */}
@@ -207,7 +198,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <Link
                   key={link.to}
                   to={link.to}
-                  className={`relative py-1 whitespace-nowrap transition-colors flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded ${
+                  className={`relative py-1 whitespace-nowrap shrink-0 transition-colors flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded ${
                     isActive
                       ? 'text-primary font-bold'
                       : 'text-on-surface-variant hover:text-primary font-medium'
@@ -221,15 +212,15 @@ export const Header: React.FC<HeaderProps> = ({
               );
             })}
 
-            {/* Desktop-only links (visible on 1280px and wider) */}
-            <div className="hidden xl:flex items-center gap-4">
-              {overflowLinks.map((link) => {
+            {/* Wide screen links (visible on 1024px and wider) */}
+            <div className="hidden lg:flex items-center gap-3 xl:gap-4 shrink-0">
+              {secondaryLinks.map((link) => {
                 const isActive = location.pathname.startsWith(link.to);
                 return (
                   <Link
                     key={link.to}
                     to={link.to}
-                    className={`relative py-1 whitespace-nowrap transition-colors flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded ${
+                    className={`relative py-1 whitespace-nowrap shrink-0 transition-colors flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded ${
                       isActive
                         ? 'text-primary font-bold'
                         : 'text-on-surface-variant hover:text-primary font-medium'
@@ -244,14 +235,19 @@ export const Header: React.FC<HeaderProps> = ({
               })}
             </div>
 
-            {/* Medium viewports (768px to 1279px): "More" dropdown */}
-            <div className="relative xl:hidden" ref={moreDropdownRef}>
+            {/* "More" dropdown: always visible on 768px+ and wide screens */}
+            <div className="relative shrink-0" ref={moreDropdownRef}>
               <button
                 type="button"
-                onClick={() => setMoreOpen(!moreOpen)}
+                onClick={() => {
+                  setMoreOpen((prev) => !prev);
+                  setAvatarMenuOpen(false);
+                }}
                 className={`relative py-1 px-1.5 flex items-center gap-0.5 whitespace-nowrap transition-colors rounded-lg hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
-                  isOverflowActive
+                  isMoreOnlyRouteActive
                     ? 'text-primary font-bold'
+                    : isSecondaryRouteActive
+                    ? 'text-primary lg:text-on-surface-variant font-bold lg:font-medium lg:hover:text-primary'
                     : 'text-on-surface-variant hover:text-primary font-medium'
                 }`}
                 aria-label="More navigation items"
@@ -264,22 +260,26 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   arrow_drop_down
                 </span>
-                {isOverflowActive && (
+                {isMoreOnlyRouteActive && (
                   <span className="absolute -bottom-1 inset-x-0 h-0.5 bg-primary rounded-full" />
+                )}
+                {!isMoreOnlyRouteActive && isSecondaryRouteActive && (
+                  <span className="lg:hidden absolute -bottom-1 inset-x-0 h-0.5 bg-primary rounded-full" />
                 )}
               </button>
 
               {/* Dropdown Menu */}
               {moreOpen && (
-                <div className="absolute top-10 left-0 z-50 w-52 bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/30 py-1.5">
-                  {overflowLinks.concat(extraMenuLinks).map((item) => {
+                <div className="absolute top-10 left-0 z-50 w-56 bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/30 py-1.5">
+                  {moreDropdownLinks.map((item) => {
                     const isActive = location.pathname.startsWith(item.to);
+                    const hideOnLarge = item.tier === 'secondary' ? 'lg:hidden' : '';
                     return (
                       <Link
                         key={item.to}
                         to={item.to}
                         onClick={() => setMoreOpen(false)}
-                        className={`flex items-center gap-2.5 px-3.5 py-2 font-label-md text-label-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                        className={`${hideOnLarge} flex items-center gap-2.5 px-3.5 py-2.5 min-h-[44px] font-label-md text-label-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                           isActive
                             ? 'bg-secondary-container/40 text-primary font-bold'
                             : 'text-on-surface hover:bg-surface-container-low'
@@ -297,8 +297,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </nav>
 
-          {/* GROUP 3: RIGHT (AI Scanner, Notification Bell, Avatar) */}
-          <div className="flex items-center gap-1 sm:gap-2 md:gap-3 shrink-0">
+          {/* GROUP 3: RIGHT (AI Scanner, Notification Bell, Avatar Menu) */}
+          <div className="flex items-center gap-1 sm:gap-2 md:gap-2.5 shrink-0">
             <Link
               to="/scan"
               aria-label="AI Scanner"
@@ -320,38 +320,118 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
               <span className="absolute top-2.5 right-2.5 w-2 h-2 rounded-full bg-tertiary ring-2 ring-surface"></span>
             </button>
-            {currentUser ? (
-              <Link
-                aria-label="User Profile"
-                to="/profile"
+
+            {/* Avatar Dropdown Menu */}
+            <div className="relative shrink-0" ref={avatarMenuRef}>
+              <button
+                type="button"
+                aria-label="Account menu"
+                aria-expanded={avatarMenuOpen}
+                aria-haspopup="menu"
+                onClick={() => {
+                  setAvatarMenuOpen((prev) => !prev);
+                  setMoreOpen(false);
+                }}
                 className="w-11 h-11 min-w-[44px] min-h-[44px] md:w-10 md:h-10 md:min-w-0 md:min-h-0 flex items-center justify-center rounded-full active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0"
               >
-                {avatarUrl ? (
-                  <img
-                    alt={displayName}
-                    className="w-8 h-8 rounded-full object-cover ring-2 ring-primary-fixed"
-                    src={avatarUrl}
-                  />
+                {currentUser ? (
+                  avatarUrl ? (
+                    <img
+                      alt={displayName}
+                      className="w-8 h-8 rounded-full object-cover ring-2 ring-primary-fixed"
+                      src={avatarUrl}
+                    />
+                  ) : (
+                    <div className="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-xs ring-2 ring-primary-fixed">
+                      {displayName.charAt(0).toUpperCase()}
+                    </div>
+                  )
                 ) : (
-                  <div className="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center font-bold text-xs ring-2 ring-primary-fixed">
-                    {displayName.charAt(0).toUpperCase()}
+                  <div className="w-8 h-8 rounded-full bg-surface-container-high text-on-surface-variant flex items-center justify-center ring-2 ring-outline-variant/30">
+                    <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                      person
+                    </span>
                   </div>
                 )}
-              </Link>
-            ) : (
-              <button
-                aria-label="Sign In"
-                type="button"
-                onClick={() => setAuthModalOpen(true)}
-                className="w-11 h-11 min-w-[44px] min-h-[44px] md:w-10 md:h-10 md:min-w-0 md:min-h-0 flex items-center justify-center rounded-full active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0"
-              >
-                <div className="w-8 h-8 rounded-full bg-surface-container-high text-on-surface-variant flex items-center justify-center ring-2 ring-outline-variant/30">
-                  <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
-                    person
-                  </span>
-                </div>
               </button>
-            )}
+
+              {avatarMenuOpen && (
+                <div
+                  role="menu"
+                  aria-label="Account menu"
+                  className="absolute top-12 right-0 z-50 w-56 bg-surface-container-lowest rounded-2xl shadow-xl border border-outline-variant/30 py-1.5"
+                >
+                  <div className="px-3.5 py-2 border-b border-outline-variant/25">
+                    <p className="font-label-md text-label-md font-bold text-on-surface truncate">
+                      {currentUser ? displayName : 'Guest Explorer'}
+                    </p>
+                    {emailText && (
+                      <p className="font-body-sm text-[11px] text-on-surface-variant truncate">
+                        {emailText}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="py-1">
+                    {avatarMenuLinks.map((item) => {
+                      const isActive = location.pathname.startsWith(item.to);
+                      return (
+                        <Link
+                          key={item.to}
+                          to={item.to}
+                          role="menuitem"
+                          onClick={() => setAvatarMenuOpen(false)}
+                          className={`flex items-center gap-2.5 px-3.5 py-2.5 min-h-[44px] font-label-md text-label-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                            isActive
+                              ? 'bg-secondary-container/40 text-primary font-bold'
+                              : 'text-on-surface hover:bg-surface-container-low'
+                          }`}
+                        >
+                          <span className="material-symbols-outlined text-[18px] text-secondary" aria-hidden="true">
+                            {item.icon}
+                          </span>
+                          <span>{item.label}</span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+
+                  <div className="pt-1 border-t border-outline-variant/25">
+                    {currentUser ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setAvatarMenuOpen(false);
+                          logout();
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 min-h-[44px] font-label-md text-label-md text-error hover:bg-error-container/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
+                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                          logout
+                        </span>
+                        <span>Sign Out</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setAvatarMenuOpen(false);
+                          setAuthModalOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2.5 px-3.5 py-2.5 min-h-[44px] font-label-md text-label-md text-primary font-semibold hover:bg-surface-container-low transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
+                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                          login
+                        </span>
+                        <span>Sign In</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -417,7 +497,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           <nav className="flex flex-col gap-1 flex-1" aria-label="Mobile navigation">
-            {mobileDrawerLinks.map((item) => {
+            {ALL_NAV_ITEMS.map((item) => {
               const isActive =
                 item.to === '/' ? location.pathname === '/' : location.pathname.startsWith(item.to);
               return (

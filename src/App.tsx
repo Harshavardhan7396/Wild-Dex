@@ -16,6 +16,7 @@ import { InviteFriendsPage } from './pages/InviteFriendsPage';
 import { SharedCollectionPage } from './pages/SharedCollectionPage';
 import { LeaderboardPage } from './pages/LeaderboardPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { NearbyPage } from './pages/NearbyPage';
 import { LoginPage } from './pages/LoginPage';
 
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -23,7 +24,7 @@ import { AuthModal } from './components/auth/AuthModal';
 import { SplashScreen } from './components/auth/SplashScreen';
 
 function AppContent() {
-  const { currentUser, loading: authLoading, isGuest } = useAuth();
+  const { currentUser, userProfile, loading: authLoading, isGuest } = useAuth();
   const [showSplash, setShowSplash] = useState(true);
   const [isExitingSplash, setIsExitingSplash] = useState(false);
   const mountTimeRef = useRef<number>(Date.now());
@@ -83,7 +84,30 @@ function AppContent() {
     return <LoginPage />;
   }
 
-  // 3. User is signed in or continuing as guest -> full app experience
+  // 3. Wait briefly if signed-in user's profile is still resolving
+  if (currentUser && !userProfile) {
+    return (
+      <div className="min-h-screen bg-surface flex items-center justify-center p-6">
+        <div className="flex items-center gap-2.5 text-primary font-label-lg text-label-lg">
+          <span className="material-symbols-outlined text-[24px] animate-spin">
+            progress_activity
+          </span>
+          <span>Loading your profile...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 4. After sign-up or sign-in, if profiles.onboarding_done is false, show full-screen onboarding flow
+  if (currentUser && userProfile && !userProfile.onboardingCompleted) {
+    return (
+      <HashRouter>
+        <OnboardingPage fullScreen />
+      </HashRouter>
+    );
+  }
+
+  // 5. User is signed in with onboarding done (or continuing as guest) -> full app experience
   return (
     <HashRouter>
       <AuthModal />
@@ -102,6 +126,7 @@ function AppContent() {
           <Route path="/invite" element={<InviteFriendsPage />} />
           <Route path="/shared-collection" element={<SharedCollectionPage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
+          <Route path="/nearby" element={<NearbyPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/onboarding" element={<OnboardingPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

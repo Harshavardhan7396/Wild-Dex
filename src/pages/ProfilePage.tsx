@@ -8,10 +8,11 @@ import {
 } from '../services/supabaseCollectionService';
 
 export const ProfilePage: React.FC = () => {
-  const { currentUser, userProfile, logout, setAuthModalOpen } = useAuth();
+  const { currentUser, userProfile, logout, saveOnboardingPreferences } = useAuth();
   const [activeTab, setActiveTab] = useState<'sightings' | 'badges' | 'taxonomy'>('sightings');
   const [userSpecimens, setUserSpecimens] = useState<FirebaseCollectionItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [clearingLocation, setClearingLocation] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -69,7 +70,7 @@ export const ProfilePage: React.FC = () => {
       unlocked: totalLogged >= 10,
     },
     {
-      name: 'BioBlitz Champion',
+      name: 'Weekly Challenge Champion',
       desc: 'Cataloged a Legendary tier species',
       icon: 'emoji_events',
       date: 'Locked',
@@ -248,8 +249,8 @@ export const ProfilePage: React.FC = () => {
           className="p-3 rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
         >
           <div className="flex items-center gap-2.5 min-w-0">
-            <span className="material-symbols-outlined text-secondary text-[22px] shrink-0">leaderboard</span>
-            <span className="font-label-md text-label-md font-bold text-on-surface truncate">Leaderboard</span>
+            <span className="material-symbols-outlined text-secondary text-[22px] shrink-0">trophy</span>
+            <span className="font-label-md text-label-md font-bold text-on-surface truncate">Weekly Challenge</span>
           </div>
           <span className="material-symbols-outlined text-outline text-[18px] shrink-0">chevron_right</span>
         </Link>
@@ -264,6 +265,100 @@ export const ProfilePage: React.FC = () => {
           <span className="material-symbols-outlined text-outline text-[18px] shrink-0">chevron_right</span>
         </Link>
       </div>
+
+      {/* Interests & Location Summary + Edit CTA */}
+      {currentUser && (
+        <div className="p-3.5 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm space-y-3 border border-outline-variant/20">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="material-symbols-outlined text-primary text-[20px]">tune</span>
+              <h2 className="font-headline-sm text-headline-sm text-on-surface">
+                My Interests &amp; Area
+              </h2>
+            </div>
+            <Link
+              to="/onboarding?edit=1"
+              className="inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold hover:opacity-95 transition-opacity shrink-0"
+            >
+              <span className="material-symbols-outlined text-[16px]">edit</span>
+              <span>Edit my interests and location</span>
+            </Link>
+          </div>
+
+          {userProfile?.interests && userProfile.interests.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {userProfile.interests.map((interest) => (
+                <span
+                  key={interest}
+                  className="px-2.5 py-1 rounded-full bg-surface-container text-on-surface font-label-sm text-label-sm font-semibold"
+                >
+                  {interest}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {userProfile?.favoriteSpecies && userProfile.favoriteSpecies.length > 0 && (
+            <div className="space-y-1">
+              <p className="font-label-sm text-[11px] text-on-surface-variant font-semibold">
+                Favorite species
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {userProfile.favoriteSpecies.map((fav) => (
+                  <span
+                    key={`${fav.id}-${fav.scientificName}`}
+                    className="px-2.5 py-1 rounded-full bg-primary/10 text-primary font-label-sm text-label-sm font-medium"
+                  >
+                    {fav.commonName}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-outline-variant/20">
+            <div className="flex items-center gap-1.5 text-on-surface-variant font-body-sm text-body-sm">
+              <span className="material-symbols-outlined text-[16px] text-secondary">
+                {userProfile?.locationConsent ? 'location_on' : 'location_off'}
+              </span>
+              <span>
+                {userProfile?.locationConsent && userProfile.homeLat != null && userProfile.homeLng != null
+                  ? `Private area (~1 km): ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
+                  : 'Home location not set'}
+              </span>
+            </div>
+
+            {userProfile?.locationConsent && (
+              <button
+                type="button"
+                disabled={clearingLocation}
+                onClick={async () => {
+                  setClearingLocation(true);
+                  try {
+                    await saveOnboardingPreferences({
+                      interests: userProfile.interests || [],
+                      favoriteSpecies: userProfile.favoriteSpecies || [],
+                      onboardingDone: true,
+                      locationConsent: false,
+                      homeLat: null,
+                      homeLng: null,
+                    });
+                    showToast('Saved location removed');
+                  } catch (err: any) {
+                    console.error('Could not remove location:', err);
+                    showToast(err?.message || 'Could not remove location');
+                  } finally {
+                    setClearingLocation(false);
+                  }
+                }}
+                className="font-label-sm text-label-sm text-error font-semibold hover:underline disabled:opacity-50"
+              >
+                {clearingLocation ? 'Removing...' : 'Delete location'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Segmented Detail Tabs */}
       <div className="flex flex-wrap sm:flex-nowrap bg-surface-container-low p-1 rounded-2xl sm:rounded-full gap-1">
