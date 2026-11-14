@@ -43,8 +43,11 @@ CREATE TABLE IF NOT EXISTS public.albums (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   owner_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   name TEXT NOT NULL,
+  description TEXT DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+
+ALTER TABLE public.albums ADD COLUMN IF NOT EXISTS description TEXT DEFAULT '';
 
 -- Indexes for albums
 CREATE INDEX IF NOT EXISTS idx_albums_owner_id ON public.albums(owner_id);
@@ -348,3 +351,507 @@ CREATE POLICY "Users can delete their own scans"
     bucket_id = 'scans' AND
     (storage.foldername(name))[1] = auth.uid()::text
   );
+
+-- ==============================================================================
+-- 9. COMMUNITY FEED (public_profiles, community_posts, likes, comments, follows, reports)
+-- ==============================================================================
+
+-- Public-safe profile view (never exposes private fields like email or rounded coordinates)
+CREATE OR REPLACE VIEW public.public_profiles AS
+SELECT
+  id,
+  COALESCE(NULLIF(username, ''), NULLIF(display_name, ''), 'Explorer') AS username,
+  COALESCE(NULLIF(display_name, ''), NULLIF(username, ''), 'Explorer') AS display_name,
+  COALESCE(avatar_url, '') AS avatar_url
+FROM public.profiles
+WHERE is_public IS NOT FALSE;
+
+GRANT SELECT ON public.public_profiles TO anon, authenticated;
+
+-- User follows
+CREATE TABLE IF NOT EXISTS public.user_follows (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  follower_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  following_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  UNIQUE(follower_id, following_id),
+  CHECK (follower_id <> following_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON public.user_follows(follower_id);
+CREATE INDEX IF NOT EXISTS idx_user_follows_following ON public.user_follows(following_id);
+
+-- Community posts
+CREATE TABLE IF NOT EXISTS public.community_posts (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  collection_item_id UUID REFERENCES public.collection_items(id) ON DELETE SET NULL,
+  species_name TEXT NOT NULL,
+  scientific_name TEXT DEFAULT '',
+  caption TEXT NOT NULL CHECK (char_length(caption) <= 500),
+  place_label TEXT DEFAULT '',
+  photo_path TEXT NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'followers')),
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_community_posts_user_id ON public.community_posts(user_id);
+CREATE INDEX IF NOT EXISTS idx_community_posts_created_at ON public.community_posts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_community_posts_visibility ON public.community_posts(visibility);
+
+-- Post likes
+CREATE TABLE IF NOT EXISTS public.post_likes (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  post_id UUID REFERENCES public.community_posts(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  UNIQUE(post_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_post_likes_post_id ON public.post_likes(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_likes_user_id ON public.post_likes(user_id);
+
+-- Post comments
+CREATE TABLE IF NOT EXISTS public.post_comments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  post_id UUID REFERENCES public.community_posts(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  body TEXT NOT NULL CHECK (char_length(body) > 0 AND char_length(body) <= 500),
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON public.post_comments(post_id);
+CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON public.post_comments(created_at ASC);
+
+-- Post reports
+CREATE TABLE IF NOT EXISTS public.reports (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  post_id UUID REFERENCES public.community_posts(id) ON DELETE CASCADE NOT NULL,
+  reporter_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reports_post_id ON public.reports(post_id);
+CREATE INDEX IF NOT EXISTS idx_reports_reporter_id ON public.reports(reporter_id);
+
+-- Enable RLS on Community tables
+ALTER TABLE public.user_follows ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.community_posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.post_likes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.post_comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.reports ENABLE ROW LEVEL SECURITY;
+
+-- user_follows policies
+DROP POLICY IF EXISTS "User follows are viewable by authenticated users" ON public.user_follows;
+CREATE POLICY "User follows are viewable by authenticated users"
+  ON public.user_follows FOR SELECT
+  TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "Users can follow others" ON public.user_follows;
+CREATE POLICY "Users can follow others"
+  ON public.user_follows FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = follower_id AND follower_id <> following_id);
+
+DROP POLICY IF EXISTS "Users can unfollow others" ON public.user_follows;
+CREATE POLICY "Users can unfollow others"
+  ON public.user_follows FOR DELETE
+  TO authenticated
+  USING (auth.uid() = follower_id);
+
+-- community_posts policies
+DROP POLICY IF EXISTS "Community posts visibility policy" ON public.community_posts;
+CREATE POLICY "Community posts visibility policy"
+  ON public.community_posts FOR SELECT
+  TO authenticated
+  USING (
+    visibility = 'public'
+    OR auth.uid() = user_id
+    OR (
+      visibility = 'followers'
+      AND EXISTS (
+        SELECT 1 FROM public.user_follows uf
+        WHERE uf.follower_id = auth.uid() AND uf.following_id = community_posts.user_id
+      )
+    )
+  );
+
+DROP POLICY IF EXISTS "Users can create their own community posts" ON public.community_posts;
+CREATE POLICY "Users can create their own community posts"
+  ON public.community_posts FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete their own community posts" ON public.community_posts;
+CREATE POLICY "Users can delete their own community posts"
+  ON public.community_posts FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+-- post_likes policies
+DROP POLICY IF EXISTS "Post likes are viewable by authenticated users" ON public.post_likes;
+CREATE POLICY "Post likes are viewable by authenticated users"
+  ON public.post_likes FOR SELECT
+  TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "Users can like posts" ON public.post_likes;
+CREATE POLICY "Users can like posts"
+  ON public.post_likes FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can unlike posts" ON public.post_likes;
+CREATE POLICY "Users can unlike posts"
+  ON public.post_likes FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+-- post_comments policies
+DROP POLICY IF EXISTS "Post comments are viewable by authenticated users" ON public.post_comments;
+CREATE POLICY "Post comments are viewable by authenticated users"
+  ON public.post_comments FOR SELECT
+  TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "Users can add comments" ON public.post_comments;
+CREATE POLICY "Users can add comments"
+  ON public.post_comments FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own comments" ON public.post_comments;
+CREATE POLICY "Users can delete own comments"
+  ON public.post_comments FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+-- reports policies
+DROP POLICY IF EXISTS "Users can view their own reports" ON public.reports;
+CREATE POLICY "Users can view their own reports"
+  ON public.reports FOR SELECT
+  TO authenticated
+  USING (auth.uid() = reporter_id);
+
+DROP POLICY IF EXISTS "Users can submit reports" ON public.reports;
+CREATE POLICY "Users can submit reports"
+  ON public.reports FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = reporter_id);
+
+-- Storage bucket 'posts' for shared community sightings
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('posts', 'posts', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+DROP POLICY IF EXISTS "Community post photos are publicly viewable" ON storage.objects;
+CREATE POLICY "Community post photos are publicly viewable"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'posts');
+
+DROP POLICY IF EXISTS "Users can upload their own post photos" ON storage.objects;
+CREATE POLICY "Users can upload their own post photos"
+  ON storage.objects FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    bucket_id = 'posts' AND
+    (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+DROP POLICY IF EXISTS "Users can delete their own post photos" ON storage.objects;
+CREATE POLICY "Users can delete their own post photos"
+  ON storage.objects FOR DELETE
+  TO authenticated
+  USING (
+    bucket_id = 'posts' AND
+    (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+-- ==============================================================================
+-- 10. WEEKLY CHALLENGES & LEADERBOARD RPC
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.challenges (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT '',
+  target INT NOT NULL DEFAULT 5 CHECK (target > 0),
+  points INT NOT NULL DEFAULT 500 CHECK (points >= 0),
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_challenges_window ON public.challenges(starts_at, ends_at);
+
+ALTER TABLE public.challenges ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Challenges are viewable by everyone" ON public.challenges;
+CREATE POLICY "Challenges are viewable by everyone"
+  ON public.challenges FOR SELECT
+  USING (true);
+
+CREATE OR REPLACE FUNCTION public.leaderboard(
+  p_since TIMESTAMPTZ DEFAULT '2000-01-01T00:00:00Z'::timestamptz,
+  p_category TEXT DEFAULT NULL
+)
+RETURNS TABLE (
+  rank BIGINT,
+  user_id UUID,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  scans_count BIGINT,
+  species_count BIGINT
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    ROW_NUMBER() OVER (
+      ORDER BY COUNT(*) DESC, COUNT(DISTINCT LOWER(ci.scientific_name)) DESC, MIN(ci.created_at) ASC
+    ) AS rank,
+    p.id AS user_id,
+    COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), 'Explorer') AS username,
+    COALESCE(NULLIF(p.display_name, ''), NULLIF(p.username, ''), 'Explorer') AS display_name,
+    COALESCE(p.avatar_url, '') AS avatar_url,
+    COUNT(*)::BIGINT AS scans_count,
+    COUNT(DISTINCT LOWER(ci.scientific_name))::BIGINT AS species_count
+  FROM public.collection_items ci
+  JOIN public.profiles p ON p.id = ci.owner_id
+  WHERE p.is_public = true
+    AND ci.created_at >= COALESCE(p_since, '2000-01-01T00:00:00Z'::timestamptz)
+    AND (
+      p_category IS NULL
+      OR TRIM(p_category) = ''
+      OR LOWER(ci.category) = LOWER(TRIM(p_category))
+    )
+  GROUP BY p.id, p.username, p.display_name, p.avatar_url
+  ORDER BY rank ASC;
+$$;
+
+REVOKE ALL ON FUNCTION public.leaderboard(TIMESTAMPTZ, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.leaderboard(TIMESTAMPTZ, TEXT) TO anon, authenticated, service_role;
+
+-- ==============================================================================
+-- 11. SHARED COLLECTION (album_members, album_invites, shared_album_items, accept_invite)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.album_members (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  album_id UUID REFERENCES public.albums(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'editor', 'viewer')),
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  UNIQUE(album_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_album_members_album_id ON public.album_members(album_id);
+CREATE INDEX IF NOT EXISTS idx_album_members_user_id ON public.album_members(user_id);
+
+CREATE TABLE IF NOT EXISTS public.album_invites (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  album_id UUID REFERENCES public.albums(id) ON DELETE CASCADE NOT NULL,
+  created_by UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('editor', 'viewer')),
+  code TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT (TIMEZONE('utc'::text, NOW()) + INTERVAL '7 days'),
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_album_invites_album_id ON public.album_invites(album_id);
+CREATE INDEX IF NOT EXISTS idx_album_invites_code ON public.album_invites(code);
+
+CREATE TABLE IF NOT EXISTS public.shared_album_items (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  album_id UUID REFERENCES public.albums(id) ON DELETE CASCADE NOT NULL,
+  added_by UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  collection_item_id UUID REFERENCES public.collection_items(id) ON DELETE SET NULL,
+  species_name TEXT NOT NULL,
+  scientific_name TEXT DEFAULT '',
+  photo_url TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shared_album_items_album_id ON public.shared_album_items(album_id);
+CREATE INDEX IF NOT EXISTS idx_shared_album_items_added_by ON public.shared_album_items(added_by);
+
+-- Automatically insert owner into album_members when an album is created
+CREATE OR REPLACE FUNCTION public.handle_new_album_member()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.album_members (album_id, user_id, role)
+  VALUES (NEW.id, NEW.owner_id, 'owner')
+  ON CONFLICT (album_id, user_id) DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS on_album_created_add_owner ON public.albums;
+CREATE TRIGGER on_album_created_add_owner
+  AFTER INSERT ON public.albums
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_album_member();
+
+-- Non-recursive SECURITY DEFINER membership helpers for RLS
+CREATE OR REPLACE FUNCTION public.is_album_owner(p_album_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.albums a
+    WHERE a.id = p_album_id AND a.owner_id = p_user_id
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_album_member(p_album_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.albums a
+    WHERE a.id = p_album_id AND a.owner_id = p_user_id
+  )
+  OR EXISTS (
+    SELECT 1 FROM public.album_members am
+    WHERE am.album_id = p_album_id AND am.user_id = p_user_id
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_album_editor_or_owner(p_album_id UUID, p_user_id UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.albums a
+    WHERE a.id = p_album_id AND a.owner_id = p_user_id
+  )
+  OR EXISTS (
+    SELECT 1 FROM public.album_members am
+    WHERE am.album_id = p_album_id
+      AND am.user_id = p_user_id
+      AND am.role IN ('owner', 'editor')
+  );
+$$;
+
+-- Enable RLS on shared album tables
+ALTER TABLE public.album_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.album_invites ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.shared_album_items ENABLE ROW LEVEL SECURITY;
+
+-- Allow members to view shared albums in addition to owners
+DROP POLICY IF EXISTS "Users can view own or shared albums" ON public.albums;
+CREATE POLICY "Users can view own or shared albums"
+  ON public.albums FOR SELECT
+  TO authenticated
+  USING (public.is_album_member(id, auth.uid()));
+
+-- album_members policies
+DROP POLICY IF EXISTS "Members can view album members" ON public.album_members;
+CREATE POLICY "Members can view album members"
+  ON public.album_members FOR SELECT
+  TO authenticated
+  USING (public.is_album_member(album_id, auth.uid()));
+
+DROP POLICY IF EXISTS "Owners can manage album members" ON public.album_members;
+CREATE POLICY "Owners can manage album members"
+  ON public.album_members FOR INSERT
+  TO authenticated
+  WITH CHECK (public.is_album_owner(album_id, auth.uid()));
+
+DROP POLICY IF EXISTS "Members can leave or owners can remove members" ON public.album_members;
+CREATE POLICY "Members can leave or owners can remove members"
+  ON public.album_members FOR DELETE
+  TO authenticated
+  USING (
+    (auth.uid() = user_id AND NOT public.is_album_owner(album_id, auth.uid()))
+    OR (public.is_album_owner(album_id, auth.uid()) AND user_id <> auth.uid())
+  );
+
+-- album_invites policies
+DROP POLICY IF EXISTS "Owners can view album invites" ON public.album_invites;
+CREATE POLICY "Owners can view album invites"
+  ON public.album_invites FOR SELECT
+  TO authenticated
+  USING (public.is_album_owner(album_id, auth.uid()));
+
+DROP POLICY IF EXISTS "Owners can create album invites" ON public.album_invites;
+CREATE POLICY "Owners can create album invites"
+  ON public.album_invites FOR INSERT
+  TO authenticated
+  WITH CHECK (public.is_album_owner(album_id, auth.uid()) AND auth.uid() = created_by);
+
+DROP POLICY IF EXISTS "Owners can delete album invites" ON public.album_invites;
+CREATE POLICY "Owners can delete album invites"
+  ON public.album_invites FOR DELETE
+  TO authenticated
+  USING (public.is_album_owner(album_id, auth.uid()));
+
+-- shared_album_items policies
+DROP POLICY IF EXISTS "Members can view shared album items" ON public.shared_album_items;
+CREATE POLICY "Members can view shared album items"
+  ON public.shared_album_items FOR SELECT
+  TO authenticated
+  USING (public.is_album_member(album_id, auth.uid()));
+
+DROP POLICY IF EXISTS "Owners and editors can add shared album items" ON public.shared_album_items;
+CREATE POLICY "Owners and editors can add shared album items"
+  ON public.shared_album_items FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    auth.uid() = added_by
+    AND public.is_album_editor_or_owner(album_id, auth.uid())
+  );
+
+DROP POLICY IF EXISTS "Editors remove own items or owners remove any item" ON public.shared_album_items;
+CREATE POLICY "Editors remove own items or owners remove any item"
+  ON public.shared_album_items FOR DELETE
+  TO authenticated
+  USING (
+    auth.uid() = added_by
+    OR public.is_album_owner(album_id, auth.uid())
+  );
+
+-- RPC: accept_invite(p_code TEXT) -> returns album_id UUID
+CREATE OR REPLACE FUNCTION public.accept_invite(p_code TEXT)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_invite RECORD;
+BEGIN
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'Please sign in to accept this invite.';
+  END IF;
+
+  IF p_code IS NULL OR TRIM(p_code) = '' THEN
+    RAISE EXCEPTION 'Invite is invalid or expired';
+  END IF;
+
+  SELECT * INTO v_invite
+  FROM public.album_invites
+  WHERE code = TRIM(p_code)
+    AND expires_at > TIMEZONE('utc'::text, NOW())
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Invite is invalid or expired';
+  END IF;
+
+  INSERT INTO public.album_members (album_id, user_id, role)
+  VALUES (v_invite.album_id, v_user_id, v_invite.role)
+  ON CONFLICT (album_id, user_id) DO UPDATE SET
+    role = CASE
+      WHEN public.album_members.role = 'owner' THEN 'owner'
+      ELSE EXCLUDED.role
+    END;
+
+  RETURN v_invite.album_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.accept_invite(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.accept_invite(TEXT) TO authenticated, service_role;

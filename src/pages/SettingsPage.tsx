@@ -1,19 +1,25 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, userProfile, setAuthModalOpen, saveOnboardingPreferences } = useAuth();
+  const { currentUser, userProfile, setAuthModalOpen, saveOnboardingPreferences, updateUserProfile } = useAuth();
   const [darkMode, setDarkMode] = useState(false);
   const [language, setLanguage] = useState('English');
   const [offlineDownloaded, setOfflineDownloaded] = useState(true);
   const [obfuscateGps, setObfuscateGps] = useState(true);
-  const [publicProfile, setPublicProfile] = useState(true);
+  const [publicProfile, setPublicProfile] = useState<boolean>(userProfile?.isPublic ?? true);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [clearingPrefs, setClearingPrefs] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (userProfile && typeof userProfile.isPublic === 'boolean') {
+      setPublicProfile(userProfile.isPublic);
+    }
+  }, [userProfile?.isPublic]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -214,9 +220,17 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
           <button
-            onClick={() => {
-              setPublicProfile(!publicProfile);
-              showToast(publicProfile ? 'Profile set to private' : 'Profile is now public');
+            onClick={async () => {
+              const next = !publicProfile;
+              setPublicProfile(next);
+              if (currentUser) {
+                try {
+                  await updateUserProfile({ isPublic: next });
+                } catch (err) {
+                  console.warn('Could not update profile visibility:', err);
+                }
+              }
+              showToast(next ? 'Profile is now public' : 'Profile set to private');
             }}
             className={`w-12 h-7 rounded-full p-1 transition-colors shrink-0 ${publicProfile ? 'bg-primary' : 'bg-surface-container-high'}`}
           >

@@ -34,6 +34,7 @@ export interface UserProfile {
   email: string;
   displayName: string;
   photoURL: string;
+  isPublic?: boolean;
   onboardingCompleted: boolean;
   onboardingDone: boolean;
   interests: string[];
@@ -243,6 +244,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: authUser.email || '',
           displayName: resolvedName || 'Nature Explorer',
           photoURL: resolvedPhoto || '',
+          isPublic: data.is_public !== false,
           onboardingCompleted: onboardingDone,
           onboardingDone,
           interests,
@@ -266,6 +268,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: authUser.email || '',
           displayName: authUser.displayName || 'Nature Explorer',
           photoURL: authUser.photoURL || '',
+          isPublic: true,
           onboardingCompleted: false,
           onboardingDone: false,
           interests: [],
@@ -501,6 +504,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (data.displayName !== undefined) updatePayload.display_name = data.displayName;
         if (data.photoURL !== undefined) updatePayload.avatar_url = data.photoURL;
         if (data.bio !== undefined) updatePayload.bio = data.bio;
+        if (data.isPublic !== undefined) updatePayload.is_public = data.isPublic;
 
         if (Object.keys(updatePayload).length > 0) {
           const { error } = await supabase

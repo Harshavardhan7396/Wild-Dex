@@ -14,6 +14,7 @@ import { OnboardingPage } from './pages/OnboardingPage';
 import { FeedPage } from './pages/FeedPage';
 import { InviteFriendsPage } from './pages/InviteFriendsPage';
 import { SharedCollectionPage } from './pages/SharedCollectionPage';
+import { JoinAlbumPage } from './pages/JoinAlbumPage';
 import { LeaderboardPage } from './pages/LeaderboardPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NearbyPage } from './pages/NearbyPage';
@@ -125,6 +126,8 @@ function AppContent() {
           <Route path="/feed" element={<FeedPage />} />
           <Route path="/invite" element={<InviteFriendsPage />} />
           <Route path="/shared-collection" element={<SharedCollectionPage />} />
+          <Route path="/shared-collection/:albumId" element={<SharedCollectionPage />} />
+          <Route path="/join/:code" element={<JoinAlbumPage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="/nearby" element={<NearbyPage />} />
           <Route path="/settings" element={<SettingsPage />} />

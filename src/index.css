@@ -198,3 +198,24 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* Clean browser print styling for PDF reports */
+@media print {
+  header,
+  nav,
+  footer,
+  .no-print {
+    display: none !important;
+  }
+
+  body,
+  html {
+    background: #ffffff !important;
+    color: #111827 !important;
+  }
+
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}
