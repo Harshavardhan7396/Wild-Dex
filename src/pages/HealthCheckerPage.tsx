@@ -6,6 +6,19 @@ import {
   HealthSubjectChoice,
   HEALTH_CATEGORIES,
 } from '../components/health/HealthSpeciesPickerModal';
+import { getSymptomsForType } from '../data/symptoms';
+import {
+  HealthResultSection,
+  DetailedHealthResult,
+  SeriousnessLevel,
+  LikelihoodWord,
+  MainPossibility,
+  OtherPossibility,
+  FoodHelpItem,
+  FoodAvoidItem,
+} from '../components/health/HealthResultSection';
+
+import { supabase } from '../lib/supabase';
 
 const STORAGE_KEY = 'wilddex_health_subject';
 
@@ -15,6 +28,278 @@ const DEFAULT_SUBJECT: HealthSubjectChoice = {
   scientificName: 'Canis familiaris',
   isCustom: false,
 };
+
+type DurationOption = 'today' | '2-3 days' | 'a week or more';
+
+const HEALTH_LOADING_STEPS = [
+  'Reading what you noticed...',
+  'Looking for possible causes...',
+  'Finding foods that help...',
+] as const;
+
+function toCleanString(raw: unknown): string | undefined {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (Array.isArray(raw)) {
+    const joined = raw
+      .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+      .map((v) => v.trim())
+      .join(' ');
+    return joined || undefined;
+  }
+  return undefined;
+}
+
+function normalizeSeriousness(raw: unknown, emergencyFlag: boolean): SeriousnessLevel | undefined {
+  if (typeof raw === 'string' && raw.trim()) {
+    const lower = raw.trim().toLowerCase();
+    if (
+      lower.includes('high') ||
+      lower.includes('urgent') ||
+      lower.includes('critical') ||
+      lower.includes('severe') ||
+      lower.includes('emergency')
+    ) {
+      return 'High';
+    }
+    if (lower.includes('medium') || lower.includes('moderate')) {
+      return 'Medium';
+    }
+    if (lower.includes('low') || lower.includes('mild')) {
+      return 'Low';
+    }
+  }
+  if (emergencyFlag) return 'High';
+  return undefined;
+}
+
+function normalizeLikelihood(raw: unknown): LikelihoodWord | undefined {
+  if (typeof raw === 'number' && !Number.isNaN(raw)) {
+    if (raw <= 1) {
+      if (raw >= 0.7) return 'Likely';
+      if (raw >= 0.35) return 'Possible';
+      return 'Unlikely';
+    }
+    if (raw >= 70) return 'Likely';
+    if (raw >= 35) return 'Possible';
+    return 'Unlikely';
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    const lower = raw.trim().toLowerCase();
+    const numMatch = lower.match(/\d+/);
+    if (lower.includes('%') && numMatch) {
+      const pct = Number(numMatch[0]);
+      if (pct >= 70) return 'Likely';
+      if (pct >= 35) return 'Possible';
+      return 'Unlikely';
+    }
+    if (lower.includes('unlikely') || lower.includes('low') || lower.includes('rare')) {
+      return 'Unlikely';
+    }
+    if (lower.includes('likely') || lower.includes('high') || lower.includes('probable') || lower.includes('very')) {
+      return 'Likely';
+    }
+    if (lower.includes('possible') || lower.includes('moderate') || lower.includes('medium') || lower.includes('maybe')) {
+      return 'Possible';
+    }
+    return 'Possible';
+  }
+  return undefined;
+}
+
+function toStringList(raw: unknown): string[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => {
+        if (typeof item === 'string') return item.trim();
+        if (item && typeof item === 'object') {
+          const obj = item as Record<string, unknown>;
+          const head = [obj.title, obj.name, obj.step, obj.action, obj.label, obj.question]
+            .find((v) => typeof v === 'string' && v.trim());
+          const body = [obj.description, obj.text, obj.detail, obj.details, obj.note, obj.notes]
+            .find((v) => typeof v === 'string' && v.trim());
+          if (typeof head === 'string' && typeof body === 'string') {
+            return `${head.trim()}: ${body.trim()}`;
+          }
+          if (typeof head === 'string') return head.trim();
+          if (typeof body === 'string') return body.trim();
+        }
+        return '';
+      })
+      .filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    const lines = trimmed
+      .split(/\r?\n/)
+      .map((line) => line.replace(/^[-•*\d.)\s]+/, '').trim())
+      .filter(Boolean);
+    return lines.length > 0 ? lines : [trimmed];
+  }
+  return [];
+}
+
+function parseMainPossibility(raw: unknown): MainPossibility | undefined {
+  if (!raw) return undefined;
+  if (typeof raw === 'string') {
+    const name = raw.trim();
+    return name ? { name } : undefined;
+  }
+  if (typeof raw === 'object') {
+    const obj = raw as Record<string, unknown>;
+    const name = toCleanString(obj.name ?? obj.title ?? obj.possibility ?? obj.condition ?? obj.label);
+    if (!name) return undefined;
+    return {
+      name,
+      explanation: toCleanString(obj.explanation ?? obj.description ?? obj.summary ?? obj.detail),
+      whyItMatches: toCleanString(obj.whyItMatches ?? obj.why_it_matches ?? obj.reason),
+      likelihood: normalizeLikelihood(obj.likelihood ?? obj.probability ?? obj.confidence),
+    };
+  }
+  return undefined;
+}
+
+function parseOtherPossibilities(raw: unknown): OtherPossibility[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item): OtherPossibility | null => {
+        if (typeof item === 'string') {
+          const name = item.trim();
+          return name ? { name } : null;
+        }
+        if (item && typeof item === 'object') {
+          const obj = item as Record<string, unknown>;
+          const name = toCleanString(obj.name ?? obj.title ?? obj.possibility ?? obj.condition ?? obj.label);
+          if (!name) return null;
+          return {
+            name,
+            explanation: toCleanString(obj.explanation ?? obj.description ?? obj.whyItMatches ?? obj.reason ?? obj.detail ?? obj.note),
+            likelihood: normalizeLikelihood(obj.likelihood ?? obj.probability ?? obj.confidence),
+          };
+        }
+        return null;
+      })
+      .filter((item): item is OtherPossibility => item !== null);
+  }
+  if (typeof raw === 'string') {
+    return toStringList(raw).map((name) => ({ name }));
+  }
+  return [];
+}
+
+function parseFoodsThatHelp(raw: unknown): FoodHelpItem[] {
+  if (!Array.isArray(raw)) {
+    if (typeof raw === 'string') {
+      return toStringList(raw).map((name) => ({ name }));
+    }
+    return [];
+  }
+  return raw
+    .map((item): FoodHelpItem | null => {
+      if (typeof item === 'string') {
+        const name = item.trim();
+        return name ? { name } : null;
+      }
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>;
+        const name = toCleanString(obj.name ?? obj.title ?? obj.food ?? obj.item);
+        if (!name) return null;
+        return {
+          name,
+          whyItHelps: toCleanString(obj.whyItHelps ?? obj.why_it_helps ?? obj.benefit ?? obj.why ?? obj.description),
+          howToGive: toCleanString(obj.howToGive ?? obj.how_to_give ?? obj.serving ?? obj.instructions ?? obj.howToUse),
+        };
+      }
+      return null;
+    })
+    .filter((item): item is FoodHelpItem => item !== null);
+}
+
+function parseFoodsToAvoid(raw: unknown): FoodAvoidItem[] {
+  if (!Array.isArray(raw)) {
+    if (typeof raw === 'string') {
+      return toStringList(raw).map((name) => ({ name }));
+    }
+    return [];
+  }
+  return raw
+    .map((item): FoodAvoidItem | null => {
+      if (typeof item === 'string') {
+        const name = item.trim();
+        return name ? { name } : null;
+      }
+      if (item && typeof item === 'object') {
+        const obj = item as Record<string, unknown>;
+        const name = toCleanString(obj.name ?? obj.title ?? obj.food ?? obj.item);
+        if (!name) return null;
+        return {
+          name,
+          why: toCleanString(obj.why ?? obj.reason ?? obj.risk ?? obj.description),
+        };
+      }
+      return null;
+    })
+    .filter((item): item is FoodAvoidItem => item !== null);
+}
+
+function parseHealthResponse(rawData: any): DetailedHealthResult {
+  const payload = rawData?.data && typeof rawData.data === 'object' ? rawData.data : rawData;
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Unexpected response from health check.');
+  }
+
+  const emergency = Boolean(
+    payload.emergency ?? payload.isEmergency ?? payload.is_emergency
+  );
+
+  const seriousness = normalizeSeriousness(
+    payload.seriousness ??
+      payload.severity ??
+      payload.howSeriousIsIt ??
+      payload.how_serious_is_it,
+    emergency
+  );
+
+  return {
+    simpleSummary: toCleanString(payload.simpleSummary ?? payload.simple_summary ?? payload.summary),
+    mainPossibility: parseMainPossibility(
+      payload.mainPossibility ??
+        payload.main_possibility ??
+        payload.primaryPossibility ??
+        payload.mostLikely
+    ),
+    otherPossibilities: parseOtherPossibilities(
+      payload.otherPossibilities ?? payload.other_possibilities ?? payload.alternatives
+    ),
+    seriousness,
+    seriousnessReason: toCleanString(payload.seriousnessReason ?? payload.seriousness_reason),
+    emergency,
+    warningSigns: toStringList(payload.warningSigns ?? payload.warning_signs),
+    whatToDoNow: toStringList(payload.whatToDoNow ?? payload.what_to_do_now ?? payload.careSteps),
+    foodsThatHelp: parseFoodsThatHelp(
+      payload.foodsThatHelp ?? payload.foods_that_help ?? payload.foodsOrCareThatHelp
+    ),
+    foodsToAvoid: parseFoodsToAvoid(
+      payload.foodsToAvoid ?? payload.foods_to_avoid ?? payload.thingsToAvoid
+    ),
+    waterRestAndCare: toStringList(
+      payload.waterRestAndCare ?? payload.water_rest_and_care ?? payload.supportiveCare
+    ),
+    howLongToRecover: toCleanString(payload.howLongToRecover ?? payload.how_long_to_recover),
+    prevention: toStringList(payload.prevention ?? payload.preventionTips),
+    whenToSeeExpert: toCleanString(
+      payload.whenToSeeExpert ?? payload.when_to_see_expert ?? payload.whenToSeeVet
+    ),
+    questionsToAskExpert: toStringList(
+      payload.questionsToAskExpert ?? payload.questions_to_ask_expert ?? payload.questionsToAsk
+    ),
+  };
+}
 
 function readInitialSubject(searchParams: URLSearchParams): HealthSubjectChoice {
   const urlName = searchParams.get('name');
@@ -47,12 +332,16 @@ function readInitialSubject(searchParams: URLSearchParams): HealthSubjectChoice 
 
 export const HealthCheckerPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([
-    'Excessive Paw Licking',
-    'Lethargy & Low Energy',
-    'Loss of Appetite (24h+)',
-  ]);
-  const [searchSymptom, setSearchSymptom] = useState('');
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
+  const [searchInput, setSearchInput] = useState('');
+  const [activeFilter, setActiveFilter] = useState('');
+  const [otherSymptom, setOtherSymptom] = useState('');
+  const [duration, setDuration] = useState<DurationOption>('today');
+  const [note, setNote] = useState('');
+  const [healthResult, setHealthResult] = useState<DetailedHealthResult | null>(null);
+  const [isChecking, setIsChecking] = useState(false);
+  const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [activeSubject, setActiveSubject] = useState<HealthSubjectChoice>(() =>
     readInitialSubject(searchParams)
   );
@@ -61,14 +350,7 @@ export const HealthCheckerPage: React.FC = () => {
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const availableSymptoms = [
-    { label: 'Vomiting', icon: '🤢' },
-    { label: 'Coughing / Wheezing', icon: '💨' },
-    { label: 'Dull Coat', icon: '✨' },
-    { label: 'Joint Stiffness', icon: '🦴' },
-    { label: 'Ear Scratching', icon: '👂' },
-    { label: 'Excessive Thirst', icon: '💧' },
-  ];
+  const typeSymptoms = getSymptomsForType(activeSubject.category);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -108,8 +390,30 @@ export const HealthCheckerPage: React.FC = () => {
     };
   }, [uploadedPhoto]);
 
+  useEffect(() => {
+    if (!isChecking) {
+      setLoadingStepIndex(0);
+      return;
+    }
+
+    setLoadingStepIndex(0);
+    const interval = setInterval(() => {
+      setLoadingStepIndex((prev) => (prev + 1) % HEALTH_LOADING_STEPS.length);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [isChecking]);
+
   const handleSelectSubject = (choice: HealthSubjectChoice) => {
     setActiveSubject(choice);
+    setSelectedSymptoms([]);
+    setSearchInput('');
+    setActiveFilter('');
+    setOtherSymptom('');
+    setDuration('today');
+    setNote('');
+    setHealthResult(null);
+    setCheckError(null);
     syncSubjectToUrlAndStorage(choice);
     setPickerOpen(false);
     showToast(`Switched to: ${choice.commonName}`);
@@ -143,6 +447,8 @@ export const HealthCheckerPage: React.FC = () => {
     : activeSubject.commonName;
 
   const toggleSymptom = (name: string) => {
+    setHealthResult(null);
+    setCheckError(null);
     if (selectedSymptoms.includes(name)) {
       setSelectedSymptoms(selectedSymptoms.filter((s) => s !== name));
     } else {
@@ -150,6 +456,141 @@ export const HealthCheckerPage: React.FC = () => {
       showToast(`Added sign: ${name}`);
     }
   };
+
+  const addCustomSymptom = (rawLabel: string, clearSearch = false) => {
+    const cleaned = rawLabel.trim();
+    if (!cleaned) return;
+    setHealthResult(null);
+    setCheckError(null);
+    const alreadyExists = selectedSymptoms.some(
+      (s) => s.toLowerCase() === cleaned.toLowerCase()
+    );
+    if (!alreadyExists) {
+      setSelectedSymptoms([...selectedSymptoms, cleaned]);
+      showToast(`Added sign: ${cleaned}`);
+    }
+    if (clearSearch) {
+      setSearchInput('');
+      setActiveFilter('');
+    }
+  };
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setActiveFilter(searchInput);
+  };
+
+  const handleClearSearch = () => {
+    setSearchInput('');
+    setActiveFilter('');
+  };
+
+  const handleAddOtherSymptom = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!otherSymptom.trim()) return;
+    addCustomSymptom(otherSymptom, false);
+    setOtherSymptom('');
+  };
+
+  const extractErrorFromResponse = async (errObj: any, fallbackData?: any): Promise<string> => {
+    let parsedBody: any = null;
+    if (errObj?.context) {
+      try {
+        const ctx = typeof errObj.context.clone === 'function' ? errObj.context.clone() : errObj.context;
+        parsedBody = await ctx.json();
+      } catch {
+        try {
+          const ctx = typeof errObj.context.clone === 'function' ? errObj.context.clone() : errObj.context;
+          parsedBody = await ctx.text();
+        } catch {
+          parsedBody = null;
+        }
+      }
+    } else if (fallbackData) {
+      parsedBody = fallbackData;
+    }
+
+    let message = '';
+    if (parsedBody && typeof parsedBody === 'object') {
+      message = parsedBody.error || parsedBody.message || '';
+    } else if (typeof parsedBody === 'string') {
+      try {
+        const parsedJson = JSON.parse(parsedBody);
+        message = parsedJson.error || parsedJson.message || parsedBody;
+      } catch {
+        message = parsedBody;
+      }
+    }
+
+    if (!message && fallbackData?.error) {
+      message = typeof fallbackData.error === 'string' ? fallbackData.error : JSON.stringify(fallbackData.error);
+    }
+
+    return message || errObj?.message || 'Could not complete the health check. Please try again.';
+  };
+
+  const handleCheckNow = async () => {
+    if (selectedSymptoms.length === 0 || isChecking) return;
+
+    setIsChecking(true);
+    setCheckError(null);
+
+    const abortController = new AbortController();
+    const timeoutTimer = setTimeout(() => abortController.abort(), 50000);
+
+    try {
+      const invokeResult = await supabase.functions.invoke('health', {
+        body: {
+          type: activeSubject.category,
+          name: subjectDisplayName,
+          symptoms: selectedSymptoms,
+          duration,
+          notes: note.trim(),
+        },
+        timeout: 50000,
+        signal: abortController.signal,
+      } as any);
+
+      const { data, error } = invokeResult;
+
+      if (error || data?.error) {
+        console.error('Health check failed:', { error, data });
+        const message = await extractErrorFromResponse(error, data);
+        setCheckError(message);
+        return;
+      }
+
+      const parsed = parseHealthResponse(data);
+      setHealthResult(parsed);
+      showToast('Health check ready');
+    } catch (err: any) {
+      console.error('Health check unexpected error:', err);
+      if (err?.name === 'AbortError' || abortController.signal.aborted) {
+        setCheckError('The health check took too long and timed out. Please try again.');
+      } else {
+        const message = await extractErrorFromResponse(err);
+        setCheckError(message);
+      }
+    } finally {
+      clearTimeout(timeoutTimer);
+      setIsChecking(false);
+    }
+  };
+
+  const normalizedFilter = activeFilter.trim().toLowerCase();
+  const filteredAvailableSymptoms = typeSymptoms.filter(
+    (s) =>
+      !selectedSymptoms.includes(s.label) &&
+      (!normalizedFilter || s.label.toLowerCase().includes(normalizedFilter))
+  );
+  const hasAnyFilterMatch =
+    !normalizedFilter ||
+    typeSymptoms.some((s) => s.label.toLowerCase().includes(normalizedFilter)) ||
+    selectedSymptoms.some((s) => s.toLowerCase().includes(normalizedFilter));
+
+  const isStep1Done = Boolean(activeSubject.category && activeSubject.commonName) && !pickerOpen;
+  const isStep2Active = isStep1Done && !healthResult;
+  const isStep3Active = Boolean(healthResult);
 
   return (
     <div className="flex flex-col w-full pb-8">
@@ -175,7 +616,7 @@ export const HealthCheckerPage: React.FC = () => {
               Health Help Notice
             </p>
             <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5 leading-relaxed">
-              For general guidance only. If an animal is badly hurt or sick, contact a licensed vet or wildlife rescuer right away.
+              This is general information, not a vet or doctor&apos;s advice. Do not give medicine without asking a vet.
             </p>
           </div>
         </div>
@@ -186,27 +627,77 @@ export const HealthCheckerPage: React.FC = () => {
         <div className="bg-surface-container-low rounded-xl p-3 sm:p-space-md shadow-sm">
           <div className="flex items-start justify-between relative mb-space-sm gap-1">
             <div className="absolute left-6 right-6 top-4 h-1 bg-surface-container-highest z-0"></div>
-            <div className="absolute left-6 w-1/2 top-4 h-1 bg-secondary z-0"></div>
+            <div
+              className={`absolute left-6 top-4 h-1 bg-secondary z-0 transition-all duration-300 ${
+                isStep3Active ? 'right-6' : isStep1Done ? 'w-1/2' : 'w-0'
+              }`}
+            ></div>
             {/* Step 1 */}
             <div className="relative z-10 flex flex-col items-center text-center flex-1 min-w-0">
-              <div className="w-8 h-8 rounded-full bg-secondary text-on-secondary flex items-center justify-center shadow-sm">
-                <span className="material-symbols-outlined text-[18px]">check</span>
+              <div
+                className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm transition-all ${
+                  isStep1Done
+                    ? 'bg-secondary text-on-secondary'
+                    : 'bg-primary text-on-primary ring-4 ring-primary-fixed-dim/40'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  {isStep1Done ? 'check' : 'pets'}
+                </span>
               </div>
-              <span className="font-label-sm text-[10px] sm:text-label-sm font-semibold text-secondary mt-1">Animal or Plant</span>
+              <span
+                className={`font-label-sm text-[10px] sm:text-label-sm font-semibold mt-1 ${
+                  isStep1Done ? 'text-secondary' : 'text-primary'
+                }`}
+              >
+                Animal or Plant
+              </span>
             </div>
             {/* Step 2 */}
             <div className="relative z-10 flex flex-col items-center text-center flex-1 min-w-0">
-              <div className="w-8 h-8 rounded-full bg-primary text-on-primary flex items-center justify-center ring-4 ring-primary-fixed-dim/40 shadow-sm">
-                <span className="material-symbols-outlined text-[18px]">stethoscope</span>
+              <div
+                className={`w-8 h-8 rounded-full flex items-center justify-center shadow-sm transition-all ${
+                  isStep3Active
+                    ? 'bg-secondary text-on-secondary'
+                    : isStep2Active
+                    ? 'bg-primary text-on-primary ring-4 ring-primary-fixed-dim/40'
+                    : 'bg-surface-container-highest text-on-surface-variant'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[18px]">
+                  {isStep3Active ? 'check' : 'stethoscope'}
+                </span>
               </div>
-              <span className="font-label-sm text-[10px] sm:text-label-sm font-semibold text-primary mt-1">What You Notice</span>
+              <span
+                className={`font-label-sm text-[10px] sm:text-label-sm font-semibold mt-1 ${
+                  isStep3Active
+                    ? 'text-secondary'
+                    : isStep2Active
+                    ? 'text-primary'
+                    : 'text-on-surface-variant'
+                }`}
+              >
+                What You Notice
+              </span>
             </div>
             {/* Step 3 */}
             <div className="relative z-10 flex flex-col items-center text-center flex-1 min-w-0">
-              <div className="w-8 h-8 rounded-full bg-surface-container-highest text-on-surface-variant flex items-center justify-center">
-                <span className="font-label-md text-label-md">3</span>
+              <div
+                className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+                  isStep3Active
+                    ? 'bg-primary text-on-primary ring-4 ring-primary-fixed-dim/40 shadow-sm'
+                    : 'bg-surface-container-highest text-on-surface-variant'
+                }`}
+              >
+                <span className="font-label-md text-label-md font-bold">3</span>
               </div>
-              <span className="font-label-sm text-[10px] sm:text-label-sm text-on-surface-variant mt-1">How Serious Is It?</span>
+              <span
+                className={`font-label-sm text-[10px] sm:text-label-sm mt-1 ${
+                  isStep3Active ? 'font-semibold text-primary' : 'text-on-surface-variant'
+                }`}
+              >
+                How Serious Is It?
+              </span>
             </div>
           </div>
 
@@ -265,52 +756,161 @@ export const HealthCheckerPage: React.FC = () => {
             </span>
           </div>
 
-          {/* Search Input */}
-          <div className="relative mb-space-sm">
-            <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[20px] text-on-surface-variant">
-              search
-            </span>
-            <input
-              className="w-full bg-surface-container pl-10 pr-4 py-2.5 rounded-full font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-secondary/50 shadow-inner"
-              placeholder="Search what you notice, behaviors, signs..."
-              type="text"
-              value={searchSymptom}
-              onChange={(e) => setSearchSymptom(e.target.value)}
-            />
-          </div>
+          {/* Search Bar with Search & Clear (X) buttons */}
+          <form onSubmit={handleSearchSubmit} className="flex items-center gap-2 mb-space-sm">
+            <div className="relative flex-1 min-w-0">
+              <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[20px] text-on-surface-variant pointer-events-none">
+                search
+              </span>
+              <input
+                className="w-full min-w-0 min-h-[44px] bg-surface-container pl-10 pr-10 py-2 rounded-full font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-secondary/50 shadow-inner"
+                placeholder={`Search ${activeSubject.category.toLowerCase()} signs...`}
+                type="text"
+                value={searchInput}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSearchInput(val);
+                  setActiveFilter(val);
+                }}
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={handleClearSearch}
+                  aria-label="Clear search"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high"
+                >
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              )}
+            </div>
+            <button
+              type="submit"
+              className="px-4 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-semibold hover:opacity-95 active:scale-95 transition-all shrink-0"
+            >
+              Search
+            </button>
+          </form>
 
           {/* Interactive Symptom Chips */}
           <div className="flex flex-wrap gap-1.5 mb-space-md">
-            {selectedSymptoms.map((symp) => (
-              <button
-                key={symp}
-                onClick={() => toggleSymptom(symp)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-primary text-on-primary font-label-md text-label-md shadow-sm active:scale-95"
-                type="button"
-              >
-                <span>🐾</span>
-                <span>{symp}</span>
-                <span className="material-symbols-outlined text-[16px]">close</span>
-              </button>
-            ))}
-
-            {availableSymptoms
-              .filter(
-                (s) =>
-                  !selectedSymptoms.includes(s.label) &&
-                  (!searchSymptom || s.label.toLowerCase().includes(searchSymptom.toLowerCase()))
-              )
-              .map((s) => (
+            {selectedSymptoms.map((symp) => {
+              const matchedOption = typeSymptoms.find((s) => s.label === symp);
+              return (
                 <button
-                  key={s.label}
-                  onClick={() => toggleSymptom(s.label)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container text-on-surface-variant font-label-md text-label-md hover:bg-surface-container-high transition-colors active:scale-95"
+                  key={symp}
+                  onClick={() => toggleSymptom(symp)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[38px] rounded-full bg-primary text-on-primary font-label-md text-label-md shadow-sm active:scale-95"
                   type="button"
                 >
-                  <span>{s.icon}</span>
-                  <span>{s.label}</span>
+                  <span>{matchedOption?.icon || '✓'}</span>
+                  <span>{symp}</span>
+                  <span className="material-symbols-outlined text-[16px]">close</span>
                 </button>
-              ))}
+              );
+            })}
+
+            {filteredAvailableSymptoms.map((s) => (
+              <button
+                key={s.label}
+                onClick={() => toggleSymptom(s.label)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[38px] rounded-full bg-surface-container text-on-surface-variant font-label-md text-label-md hover:bg-surface-container-high transition-colors active:scale-95"
+                type="button"
+              >
+                <span>{s.icon}</span>
+                <span>{s.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* No Match State with Add Own Symptom */}
+          {normalizedFilter && !hasAnyFilterMatch && (
+            <div className="mb-space-md p-3 rounded-xl bg-surface-container flex flex-wrap items-center justify-between gap-2">
+              <p className="font-body-sm text-body-sm text-on-surface-variant">
+                No match. Add it as your own
+              </p>
+              <button
+                type="button"
+                onClick={() => addCustomSymptom(activeFilter, true)}
+                className="px-3.5 py-1.5 min-h-[40px] rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold hover:opacity-95 active:scale-95 shrink-0"
+              >
+                Add &quot;{activeFilter.trim()}&quot;
+              </button>
+            </div>
+          )}
+
+          {/* Other (type it), How long?, and Optional Note */}
+          <div className="space-y-3 mb-space-md pt-2 border-t border-outline-variant/20">
+            <form onSubmit={handleAddOtherSymptom} className="space-y-1.5">
+              <label
+                htmlFor="health-other-symptom"
+                className="block font-label-sm text-label-sm font-semibold text-on-surface-variant"
+              >
+                Other (type it)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="health-other-symptom"
+                  type="text"
+                  value={otherSymptom}
+                  onChange={(e) => setOtherSymptom(e.target.value)}
+                  placeholder="Type anything else you notice..."
+                  className="flex-1 min-w-0 min-h-[44px] bg-surface-container px-4 py-2 rounded-full font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-secondary/50 shadow-inner"
+                />
+                <button
+                  type="submit"
+                  disabled={!otherSymptom.trim()}
+                  className="px-4 min-h-[44px] rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold disabled:opacity-50 active:scale-95 shrink-0"
+                >
+                  Add
+                </button>
+              </div>
+            </form>
+
+            <div className="space-y-1.5">
+              <span className="block font-label-sm text-label-sm font-semibold text-on-surface-variant">
+                How long?
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: 'today', label: 'Today' },
+                    { id: '2-3 days', label: '2-3 days' },
+                    { id: 'a week or more', label: 'A week or more' },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setDuration(opt.id)}
+                    className={`px-3.5 py-1.5 min-h-[40px] rounded-full font-label-md text-label-md transition-colors active:scale-95 ${
+                      duration === opt.id
+                        ? 'bg-secondary text-on-secondary font-semibold shadow-sm'
+                        : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label
+                htmlFor="health-optional-note"
+                className="block font-label-sm text-label-sm font-semibold text-on-surface-variant"
+              >
+                Note (optional)
+              </label>
+              <textarea
+                id="health-optional-note"
+                rows={2}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Add any extra details (optional)..."
+                className="w-full min-w-0 bg-surface-container px-4 py-2.5 rounded-2xl font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-secondary/50 shadow-inner resize-none"
+              />
+            </div>
           </div>
 
           {/* Optional User Photo Upload */}
@@ -360,190 +960,101 @@ export const HealthCheckerPage: React.FC = () => {
               </div>
             )}
           </div>
+          {/* Check Now CTA */}
+          <div className="pt-space-md">
+            <button
+              type="button"
+              disabled={selectedSymptoms.length === 0 || isChecking}
+              onClick={handleCheckNow}
+              className="w-full min-h-[48px] rounded-full bg-primary text-on-primary font-label-lg text-label-lg font-bold flex items-center justify-center gap-2 shadow-md hover:bg-primary-container active:scale-[0.99] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+            >
+              <span className="material-symbols-outlined text-[20px]">
+                {isChecking ? 'hourglass_top' : 'stethoscope'}
+              </span>
+              <span>{isChecking ? HEALTH_LOADING_STEPS[loadingStepIndex] : 'Check Now'}</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Primary Diagnostic Assessment */}
-      <div className="px-3 sm:px-margin py-space-sm">
-        <div className="bg-surface-container-low rounded-xl p-3 sm:p-space-md shadow-md relative overflow-hidden">
-          <div className="flex items-start justify-between gap-space-sm mb-space-sm">
-            <div className="min-w-0">
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold uppercase tracking-wider mb-1.5">
-                <span className="material-symbols-outlined text-[14px]">verified</span>
-                Main Possibility
-              </span>
-              <h3 className="font-headline-md text-headline-md text-on-surface leading-tight">
-                Seasonal Skin Allergy & Food Sensitivity
-              </h3>
-            </div>
-            <div className="shrink-0 text-right">
-              <div className="inline-flex flex-col items-center justify-center w-14 h-14 rounded-full bg-primary text-on-primary shadow-sm relative group">
-                <span className="font-headline-sm text-headline-sm leading-none font-bold">88%</span>
-                <span className="font-label-sm text-[10px] text-on-primary-container leading-none mt-0.5">MATCH</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 mb-space-sm">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-tertiary-fixed text-on-tertiary-fixed font-label-sm text-label-sm font-semibold">
-              <span className="w-2 h-2 rounded-full bg-tertiary animate-pulse"></span>
-              Medium Concern • Not an Emergency
-            </span>
-            <span className="font-label-sm text-label-sm text-on-surface-variant">Started: 2–3 days ago</span>
-          </div>
-
-          <p className="font-body-md text-body-md text-on-surface-variant leading-relaxed">
-            Strong match based on paw redness, frequent licking, and lower energy after being outside. Likely caused by outdoor grass pollen or a food ingredient. Breathing looks normal.
-          </p>
-
-          <div className="mt-space-md pt-space-md border-t-0 bg-surface-container/60 rounded-lg p-space-sm">
-            <p className="font-label-sm text-label-sm text-on-surface-variant font-semibold uppercase tracking-wider mb-space-xs">
-              Other Possibilities
-            </p>
-            <div className="flex items-center justify-between py-1.5 px-space-xs hover:bg-surface-container rounded transition-colors">
-              <div className="flex items-center gap-space-xs min-w-0">
-                <span className="material-symbols-outlined text-[18px] text-on-surface-variant">drag_indicator</span>
-                <div className="truncate">
-                  <p className="font-label-md text-label-md text-on-surface truncate">Flea Itch Allergy</p>
-                  <p className="font-body-sm text-body-sm text-on-surface-variant">Low risk • Itching mostly around tail</p>
+      {/* Primary Diagnostic Assessment (Step 3) */}
+      {(isChecking || checkError || healthResult) && (
+        <div className="px-3 sm:px-margin py-space-sm">
+          {isChecking && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="bg-surface-container-low rounded-xl p-4 sm:p-space-md shadow-sm space-y-3"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-secondary-container/60 text-secondary flex items-center justify-center shrink-0 animate-pulse">
+                  <span className="material-symbols-outlined text-[22px]">stethoscope</span>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-headline-sm text-headline-sm text-on-surface">
+                    {HEALTH_LOADING_STEPS[loadingStepIndex]}
+                  </h3>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant">
+                    Checking {activeSubject.commonName} ({selectedSymptoms.length}{' '}
+                    {selectedSymptoms.length === 1 ? 'sign' : 'signs'})
+                  </p>
                 </div>
               </div>
-              <span className="font-label-md text-label-md font-bold text-secondary shrink-0 ml-2">72%</span>
+              <div className="flex items-center gap-2 pt-1">
+                {HEALTH_LOADING_STEPS.map((step, idx) => (
+                  <div
+                    key={step}
+                    className={`h-1.5 flex-1 rounded-full transition-colors duration-300 ${
+                      idx <= loadingStepIndex ? 'bg-secondary' : 'bg-surface-container-highest'
+                    }`}
+                  />
+                ))}
+              </div>
+              <div className="space-y-2 pt-1 animate-pulse">
+                <div className="h-4 bg-surface-container-high rounded w-3/4"></div>
+                <div className="h-3 bg-surface-container-high rounded w-full"></div>
+                <div className="h-3 bg-surface-container-high rounded w-5/6"></div>
+              </div>
             </div>
-            <div className="flex items-center justify-between py-1.5 px-space-xs hover:bg-surface-container rounded transition-colors mt-0.5">
-              <div className="flex items-center gap-space-xs min-w-0">
-                <span className="material-symbols-outlined text-[18px] text-tertiary">warning</span>
-                <div className="truncate">
-                  <p className="font-label-md text-label-md text-on-surface truncate">Skin Mites</p>
-                  <p className="font-body-sm text-body-sm text-tertiary">Needs Attention • Vet check suggested</p>
+          )}
+
+          {!isChecking && checkError && (
+            <div className="bg-error-container/25 border border-error/40 rounded-xl p-4 sm:p-space-md shadow-sm space-y-3">
+              <div className="flex items-start gap-3">
+                <span className="material-symbols-outlined text-[22px] text-error shrink-0 mt-0.5">
+                  error
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="font-label-lg text-label-lg font-semibold text-error">
+                    Health Check Failed
+                  </p>
+                  <p className="font-body-sm text-body-sm text-on-surface mt-1 break-words">
+                    {checkError}
+                  </p>
                 </div>
               </div>
-              <span className="font-label-md text-label-md font-bold text-on-surface-variant shrink-0 ml-2">41%</span>
+              <button
+                type="button"
+                onClick={handleCheckNow}
+                className="inline-flex items-center justify-center gap-2 px-5 min-h-[44px] rounded-full bg-error text-on-error font-label-md text-label-md font-semibold hover:opacity-95 active:scale-95 transition-all"
+              >
+                <span className="material-symbols-outlined text-[18px]">refresh</span>
+                <span>Retry</span>
+              </button>
             </div>
-          </div>
+          )}
+
+          {!isChecking && !checkError && healthResult && (
+            <HealthResultSection
+              result={healthResult}
+              subjectName={subjectDisplayName}
+              subjectCategory={activeSubject.category}
+              duration={duration}
+              onNotify={showToast}
+            />
+          )}
         </div>
-      </div>
-
-      {/* Treatment & Care Steps */}
-      <div className="px-3 sm:px-margin py-space-xs">
-        <div className="bg-surface-container-low rounded-xl p-3 sm:p-space-md shadow-sm">
-          <h3 className="font-headline-sm text-headline-sm text-on-surface mb-space-sm">Care Steps</h3>
-          <div className="space-y-space-sm">
-            <div className="bg-surface-container rounded-lg p-space-sm flex items-start gap-space-sm">
-              <div className="w-8 h-8 rounded-full bg-secondary text-on-secondary flex items-center justify-center shrink-0 mt-0.5">
-                <span className="material-symbols-outlined text-[18px]">healing</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-label-lg text-label-lg text-on-surface font-semibold">Quick Relief</p>
-                <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5 leading-relaxed">
-                  1. Gentle oatmeal foot soak for 10 minutes.<br />
-                  2. Apply gentle pet-safe soothing spray to red spots.<br />
-                  3. Cool, clean damp cloth compress to reduce redness.
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-surface-container rounded-lg p-space-sm flex items-start gap-space-sm">
-              <div className="w-8 h-8 rounded-full bg-tertiary text-on-tertiary flex items-center justify-center shrink-0 mt-0.5">
-                <span className="material-symbols-outlined text-[18px]">shield</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-label-lg text-label-lg text-on-surface font-semibold">Things to Avoid</p>
-                <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5 leading-relaxed">
-                  Avoid hot water baths (makes itchiness worse). Keep paws dry from tall wet grass. Watch for small blisters or yellow fluid.
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-surface-container rounded-lg p-space-sm flex items-start gap-space-sm">
-              <div className="w-8 h-8 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shrink-0 mt-0.5">
-                <span className="material-symbols-outlined text-[18px]">eco</span>
-              </div>
-              <div className="flex-1">
-                <p className="font-label-lg text-label-lg text-on-surface font-semibold">Skin Protection</p>
-                <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5 leading-relaxed">
-                  Wipe paws after walks outside. A pet fish-oil supplement can help protect dry skin.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recommended Foods & Nutritional Support */}
-      <div className="px-3 sm:px-margin py-space-sm">
-        <div className="flex items-center justify-between mb-space-sm gap-2">
-          <div>
-            <h3 className="font-headline-sm text-headline-sm text-on-surface">Helpful Foods</h3>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">Foods that help soothe skin irritation</p>
-          </div>
-          <span className="material-symbols-outlined text-secondary shrink-0">restaurant</span>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:flex gap-space-sm md:overflow-x-auto pb-space-xs md:-mx-margin md:px-margin no-scrollbar">
-          {/* Card 1 */}
-          <div className="bg-surface-container-low rounded-xl w-full md:w-64 md:shrink-0 overflow-hidden shadow-sm flex flex-col">
-            <div className="relative h-28 w-full">
-              <img
-                className="w-full h-full object-cover"
-                alt="Wild Salmon & Marine Lipids"
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuBmIKuit9RPlgYpCMQozKgXGckaPIYCO0_nr9IgCM7CsLLc3aXzOuE5GV7PyhzWTkz6OE-UKIRg8N6ct2nWw_1-GCDE6DM_C93HFijMjsEiecdr1sbROQuL0E8EOB4x_-n6hJjZFGnA3PCXfHRD0oPWbWLje3VrlBXiJUcyGVEPK_61h18jrx3sJrwLTphRM7fuA2Xfquu-_lGS2rYoXFCiHOT5J841xiUaiOsNDs2hqMDpJtt9xfzzng"
-              />
-              <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-primary/80 backdrop-blur-sm text-on-primary font-label-sm text-label-sm">
-                High EPA/DHA
-              </span>
-            </div>
-            <div className="p-space-sm flex-1 flex flex-col justify-between">
-              <div>
-                <p className="font-label-lg text-label-lg text-on-surface font-semibold">Wild Salmon & Marine Lipids</p>
-                <p className="font-body-sm text-body-sm text-on-surface-variant mt-1 leading-snug">
-                  Inhibits inflammatory arachidonic cascade and reinforces dermal lipid barrier.
-                </p>
-              </div>
-              <div className="mt-space-sm flex items-center justify-between">
-                <span className="font-label-sm text-label-sm text-secondary font-semibold">1,200mg / day</span>
-                <button
-                  onClick={() => showToast('Added Marine Lipids to Field Nutrition Plan')}
-                  className="material-symbols-outlined text-[18px] text-secondary hover:scale-110"
-                >
-                  add_circle
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Card 2 */}
-          <div className="bg-surface-container-low rounded-xl w-full md:w-64 md:shrink-0 overflow-hidden shadow-sm flex flex-col">
-            <div className="relative h-28 w-full">
-              <img
-                className="w-full h-full object-cover"
-                alt="Steamed Pumpkin Puree"
-                src="https://lh3.googleusercontent.com/aida-public/AB6AXuCSkIYSsEhqX4-7iabhMffEepvy_kpCq9FLazZYtBG8uGjUFPUX62Km4gQj9vB_JFyelGrTtvcBLAFpT0gvEEAjeE0pV30brtUxw7dUE2yOTt7Jq62dYyLe83pLLn73EBXrlRiM_G7kWfTZ4-RbShK1NMubY8duE13KSQYcTEGWCHF9DlztcqXacLRPkVOryNV7LMS46mNvlDaSUxjdzsAYzoquHqiR1DlyRssrfTWJ-iiJDWuP8GwOMQ"
-              />
-              <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-primary/80 backdrop-blur-sm text-on-primary font-label-sm text-label-sm">
-                Zinc & Prebiotics
-              </span>
-            </div>
-            <div className="p-space-sm flex-1 flex flex-col justify-between">
-              <div>
-                <p className="font-label-lg text-label-lg text-on-surface font-semibold">Steamed Pumpkin Puree</p>
-                <p className="font-body-sm text-body-sm text-on-surface-variant mt-1 leading-snug">
-                  Soluble fiber optimizes intestinal microbiome, calming secondary histamine flare-ups.
-                </p>
-              </div>
-              <div className="mt-space-sm flex items-center justify-between">
-                <span className="font-label-sm text-label-sm text-secondary font-semibold">2 Tbsp / meal</span>
-                <button
-                  onClick={() => showToast('Added Pumpkin Puree to Field Nutrition Plan')}
-                  className="material-symbols-outlined text-[18px] text-secondary hover:scale-110"
-                >
-                  add_circle
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      )}
 
       {/* Urgent Action & Vet Assistance Locator */}
       <div className="px-3 sm:px-margin pt-space-xs pb-space-lg">
