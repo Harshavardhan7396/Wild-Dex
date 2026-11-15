@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -14,12 +15,31 @@ export const SettingsPage: React.FC = () => {
   const [clearingPrefs, setClearingPrefs] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [privatePrefs, setPrivatePrefs] = useState<UserPrivateData | null>(null);
 
   useEffect(() => {
     if (userProfile && typeof userProfile.isPublic === 'boolean') {
       setPublicProfile(userProfile.isPublic);
     }
   }, [userProfile?.isPublic]);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setPrivatePrefs(null);
+      return;
+    }
+    let active = true;
+    fetchMyUserPrivate()
+      .then((priv) => {
+        if (active) setPrivatePrefs(priv);
+      })
+      .catch((err) => {
+        console.warn('Could not load user_private on Settings:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.id]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -50,7 +70,22 @@ export const SettingsPage: React.FC = () => {
         locationConsent: false,
         homeLat: null,
         homeLng: null,
+        homeLabel: '',
       });
+      setPrivatePrefs((prev) =>
+        prev
+          ? {
+              ...prev,
+              interests: [],
+              favoriteSpecies: [],
+              onboardingDone: true,
+              locationConsent: false,
+              homeLat: null,
+              homeLng: null,
+              homeLabel: '',
+            }
+          : null
+      );
       showToast('Saved interests and location deleted');
     } catch (err: any) {
       console.error('Failed to delete saved interests & location:', err);
@@ -304,9 +339,9 @@ export const SettingsPage: React.FC = () => {
         </Link>
 
         {currentUser &&
-          ((userProfile?.interests?.length ?? 0) > 0 ||
-            (userProfile?.favoriteSpecies?.length ?? 0) > 0 ||
-            userProfile?.locationConsent) && (
+          (((privatePrefs ?? userProfile)?.interests?.length ?? 0) > 0 ||
+            ((privatePrefs ?? userProfile)?.favoriteSpecies?.length ?? 0) > 0 ||
+            (privatePrefs ?? userProfile)?.locationConsent) && (
             <button
               type="button"
               disabled={clearingPrefs}

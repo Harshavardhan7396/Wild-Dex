@@ -15,23 +15,52 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   avatar_url TEXT,
   bio TEXT,
   is_public BOOLEAN DEFAULT true,
-  onboarding_done BOOLEAN DEFAULT false,
-  interests TEXT[] DEFAULT '{}'::text[],
-  favorite_species JSONB DEFAULT '[]'::jsonb,
-  location_consent BOOLEAN DEFAULT false,
-  home_lat DOUBLE PRECISION,
-  home_lng DOUBLE PRECISION,
   not_interested_taxa BIGINT[] DEFAULT '{}'::bigint[],
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS onboarding_done BOOLEAN DEFAULT false;
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS interests TEXT[] DEFAULT '{}'::text[];
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS favorite_species JSONB DEFAULT '[]'::jsonb;
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS location_consent BOOLEAN DEFAULT false;
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS home_lat DOUBLE PRECISION;
-ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS home_lng DOUBLE PRECISION;
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS not_interested_taxa BIGINT[] DEFAULT '{}'::bigint[];
+
+-- 2B. USER_PRIVATE TABLE (Sensitive onboarding interests, favorites & rounded home location)
+CREATE TABLE IF NOT EXISTS public.user_private (
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+  interests TEXT[] DEFAULT '{}'::text[],
+  favorite_species JSONB DEFAULT '[]'::jsonb,
+  onboarding_done BOOLEAN DEFAULT false,
+  location_consent BOOLEAN DEFAULT false,
+  home_lat DOUBLE PRECISION,
+  home_lng DOUBLE PRECISION,
+  home_label TEXT DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+ALTER TABLE public.user_private ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own user_private" ON public.user_private;
+CREATE POLICY "Users can view own user_private"
+  ON public.user_private FOR SELECT
+  TO authenticated
+  USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own user_private" ON public.user_private;
+CREATE POLICY "Users can insert own user_private"
+  ON public.user_private FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update own user_private" ON public.user_private;
+CREATE POLICY "Users can update own user_private"
+  ON public.user_private FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own user_private" ON public.user_private;
+CREATE POLICY "Users can delete own user_private"
+  ON public.user_private FOR DELETE
+  TO authenticated
+  USING (auth.uid() = user_id);
 
 -- Unique case-insensitive index for usernames
 CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_username_lower ON public.profiles(LOWER(username));
@@ -248,6 +277,10 @@ BEGIN
     display_name = COALESCE(EXCLUDED.display_name, public.profiles.display_name),
     avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url);
 
+  INSERT INTO public.user_private (user_id, onboarding_done)
+  VALUES (NEW.id, false)
+  ON CONFLICT (user_id) DO NOTHING;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -377,6 +410,51 @@ CREATE TABLE IF NOT EXISTS public.user_follows (
   UNIQUE(follower_id, following_id),
   CHECK (follower_id <> following_id)
 );
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'user_follows'
+  ) THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'user_follows' AND column_name = 'follower_id'
+    ) THEN
+      ALTER TABLE public.user_follows
+        ADD COLUMN follower_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'user_follows' AND column_name = 'user_id'
+      ) THEN
+        UPDATE public.user_follows SET follower_id = user_id WHERE follower_id IS NULL;
+        ALTER TABLE public.user_follows ALTER COLUMN user_id DROP NOT NULL;
+      END IF;
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'user_follows' AND column_name = 'following_id'
+    ) THEN
+      ALTER TABLE public.user_follows
+        ADD COLUMN following_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'user_follows' AND column_name = 'followed_id'
+      ) THEN
+        UPDATE public.user_follows SET following_id = followed_id WHERE following_id IS NULL;
+        ALTER TABLE public.user_follows ALTER COLUMN followed_id DROP NOT NULL;
+      ELSIF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'user_follows' AND column_name = 'target_id'
+      ) THEN
+        UPDATE public.user_follows SET following_id = target_id WHERE following_id IS NULL;
+        ALTER TABLE public.user_follows ALTER COLUMN target_id DROP NOT NULL;
+      END IF;
+    END IF;
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON public.user_follows(follower_id);
 CREATE INDEX IF NOT EXISTS idx_user_follows_following ON public.user_follows(following_id);
 
@@ -393,6 +471,44 @@ CREATE TABLE IF NOT EXISTS public.community_posts (
   visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'followers')),
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'community_posts'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'community_posts' AND column_name = 'user_id'
+  ) THEN
+    ALTER TABLE public.community_posts
+      ADD COLUMN user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE;
+
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'community_posts' AND column_name = 'author_id'
+    ) THEN
+      UPDATE public.community_posts SET user_id = author_id WHERE user_id IS NULL;
+      ALTER TABLE public.community_posts ALTER COLUMN author_id DROP NOT NULL;
+    ELSIF EXISTS (
+      SELECT 1 FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = 'community_posts' AND column_name = 'owner_id'
+    ) THEN
+      UPDATE public.community_posts SET user_id = owner_id WHERE user_id IS NULL;
+      ALTER TABLE public.community_posts ALTER COLUMN owner_id DROP NOT NULL;
+    END IF;
+  END IF;
+END $$;
+
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS collection_item_id UUID REFERENCES public.collection_items(id) ON DELETE SET NULL;
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS species_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS scientific_name TEXT DEFAULT '';
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS caption TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS place_label TEXT DEFAULT '';
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS photo_path TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'public';
+ALTER TABLE public.community_posts ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_community_posts_user_id ON public.community_posts(user_id);
 CREATE INDEX IF NOT EXISTS idx_community_posts_created_at ON public.community_posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_community_posts_visibility ON public.community_posts(visibility);
@@ -642,6 +758,7 @@ CREATE TABLE IF NOT EXISTS public.album_members (
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
   UNIQUE(album_id, user_id)
 );
+ALTER TABLE public.album_members ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_album_members_album_id ON public.album_members(album_id);
 CREATE INDEX IF NOT EXISTS idx_album_members_user_id ON public.album_members(user_id);
 
@@ -667,6 +784,10 @@ CREATE TABLE IF NOT EXISTS public.shared_album_items (
   photo_url TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+ALTER TABLE public.shared_album_items ADD COLUMN IF NOT EXISTS collection_item_id UUID REFERENCES public.collection_items(id) ON DELETE SET NULL;
+ALTER TABLE public.shared_album_items ADD COLUMN IF NOT EXISTS scientific_name TEXT DEFAULT '';
+ALTER TABLE public.shared_album_items ADD COLUMN IF NOT EXISTS photo_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.shared_album_items ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_shared_album_items_album_id ON public.shared_album_items(album_id);
 CREATE INDEX IF NOT EXISTS idx_shared_album_items_added_by ON public.shared_album_items(added_by);
 
@@ -855,3 +976,6 @@ $$;
 
 REVOKE ALL ON FUNCTION public.accept_invite(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.accept_invite(TEXT) TO authenticated, service_role;
+
+-- Refresh PostgREST schema cache so newly added columns are immediately visible
+NOTIFY pgrst, 'reload schema';

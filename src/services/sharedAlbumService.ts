@@ -74,6 +74,27 @@ function isRelationshipMissingError(error: any): boolean {
   );
 }
 
+function isMissingColumnError(error: any): boolean {
+  if (!error) return false;
+  const code = String(error.code || '');
+  const msg = String(error.message || '').toLowerCase();
+  return (
+    code === '42703' ||
+    code === 'PGRST204' ||
+    (msg.includes('column') && msg.includes('does not exist')) ||
+    msg.includes('could not find the')
+  );
+}
+
+function extractMissingColumnName(error: any): string | null {
+  const msg = String(error?.message || '');
+  const pgMatch = msg.match(/column\s+(?:[a-z0-9_]+\.)?([a-z0-9_]+)\s+does not exist/i);
+  if (pgMatch?.[1]) return pgMatch[1].toLowerCase();
+  const pgrstMatch = msg.match(/could not find the '([a-z0-9_]+)' column/i);
+  if (pgrstMatch?.[1]) return pgrstMatch[1].toLowerCase();
+  return null;
+}
+
 function normalizeRole(raw: unknown): AlbumRole {
   const val = String(raw || '').toLowerCase();
   if (val === 'owner') return 'owner';
@@ -123,6 +144,12 @@ async function fetchPublicProfilesMap(userIds: string[]): Promise<Map<string, Pu
     console.warn('Error fetching public_profiles:', err);
   }
   return map;
+}
+
+export const PUBLIC_SITE_URL = 'https://wild-dex-pearl.vercel.app';
+
+export function getShareableAppOrigin(): string {
+  return PUBLIC_SITE_URL;
 }
 
 function generateInviteCode(length = 10): string {
@@ -332,41 +359,89 @@ export async function fetchAlbumDetail(
 
     const albumRow = albumRes.data;
 
-    // Fetch album_members joined with public_profiles (with PGRST200 fallback)
+    // Fetch album_members joined with public_profiles (tolerant of missing relationship or optional id/created_at columns)
     let membersData: any[] = [];
-    let membersQuery = await supabase
+    const membersQuery = await supabase
       .from('album_members')
-      .select('id, album_id, user_id, role, created_at, public_profiles(id, username, display_name, avatar_url)')
+      .select('album_id, user_id, role, created_at, public_profiles(id, username, display_name, avatar_url)')
       .eq('album_id', albumId)
       .order('created_at', { ascending: true });
 
-    if (membersQuery.error && isRelationshipMissingError(membersQuery.error)) {
-      const fallback = await supabase
+    if (
+      membersQuery.error &&
+      (isRelationshipMissingError(membersQuery.error) || isMissingColumnError(membersQuery.error))
+    ) {
+      const fallbackWithCreatedAt = await supabase
         .from('album_members')
-        .select('id, album_id, user_id, role, created_at')
+        .select('album_id, user_id, role, created_at')
         .eq('album_id', albumId)
         .order('created_at', { ascending: true });
-      if (fallback.error) {
-        throw new Error(fallback.error.message || 'Could not load album members.');
+
+      if (fallbackWithCreatedAt.error && isMissingColumnError(fallbackWithCreatedAt.error)) {
+        const minimalFallback = await supabase
+          .from('album_members')
+          .select('album_id, user_id, role')
+          .eq('album_id', albumId);
+
+        if (minimalFallback.error) {
+          throw new Error(minimalFallback.error.message || 'Could not load album members.');
+        }
+        membersData = minimalFallback.data || [];
+      } else if (fallbackWithCreatedAt.error) {
+        throw new Error(fallbackWithCreatedAt.error.message || 'Could not load album members.');
+      } else {
+        membersData = fallbackWithCreatedAt.data || [];
       }
-      membersData = fallback.data || [];
     } else if (membersQuery.error) {
       throw new Error(membersQuery.error.message || 'Could not load album members.');
     } else {
       membersData = membersQuery.data || [];
     }
 
-    // Fetch shared items
-    const itemsRes = await supabase
-      .from('shared_album_items')
-      .select('id, album_id, added_by, collection_item_id, species_name, scientific_name, photo_url, created_at')
-      .eq('album_id', albumId)
-      .order('created_at', { ascending: false });
+    // Fetch shared items (adaptively strip optional missing columns like collection_item_id)
+    let itemSelectCols = [
+      'id',
+      'album_id',
+      'added_by',
+      'collection_item_id',
+      'species_name',
+      'scientific_name',
+      'photo_url',
+      'created_at',
+    ];
+    let orderItemsByCreatedAt = true;
+    let rawItems: any[] = [];
 
-    if (itemsRes.error) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      let query = supabase
+        .from('shared_album_items')
+        .select(itemSelectCols.join(', '))
+        .eq('album_id', albumId);
+      if (orderItemsByCreatedAt && itemSelectCols.includes('created_at')) {
+        query = query.order('created_at', { ascending: false });
+      }
+      const itemsRes = await query;
+
+      if (!itemsRes.error) {
+        rawItems = itemsRes.data || [];
+        break;
+      }
+
+      if (isMissingColumnError(itemsRes.error)) {
+        const missingCol = extractMissingColumnName(itemsRes.error);
+        if (missingCol && itemSelectCols.includes(missingCol)) {
+          itemSelectCols = itemSelectCols.filter((c) => c !== missingCol);
+          if (missingCol === 'created_at') orderItemsByCreatedAt = false;
+          continue;
+        }
+        if (itemSelectCols.includes('collection_item_id')) {
+          itemSelectCols = itemSelectCols.filter((c) => c !== 'collection_item_id');
+          continue;
+        }
+      }
+
       throw new Error(itemsRes.error.message || 'Could not load shared items.');
     }
-    const rawItems = itemsRes.data || [];
 
     // Collect user IDs needing public_profiles lookup
     const idsNeedingProfile = new Set<string>();
@@ -393,11 +468,11 @@ export async function fetchAlbumDetail(
       profilesMap.set(m.user_id, profile);
 
       return {
-        id: m.id,
+        id: m.id || `${m.album_id}-${m.user_id}`,
         albumId: m.album_id,
         userId: m.user_id,
         role: m.user_id === albumRow.owner_id ? 'owner' : normalizeRole(m.role),
-        createdAt: m.created_at,
+        createdAt: m.created_at || albumRow.created_at || '',
         profile,
       };
     });
@@ -427,14 +502,14 @@ export async function fetchAlbumDetail(
     const items: SharedAlbumItem[] = rawItems.map((row) => {
       const adder = profilesMap.get(row.added_by);
       return {
-        id: row.id,
+        id: row.id || `${row.album_id}-${row.added_by}-${row.species_name}`,
         albumId: row.album_id,
         addedBy: row.added_by,
         collectionItemId: row.collection_item_id || null,
         speciesName: row.species_name || 'Nature Discovery',
         scientificName: row.scientific_name || '',
         photoUrl: row.photo_url || '',
-        createdAt: row.created_at,
+        createdAt: row.created_at || albumRow.created_at || '',
         addedByName: adder?.username || adder?.displayName || 'Member',
       };
     });
@@ -481,19 +556,18 @@ export async function createAlbumInvite(params: {
           expires_at: expiresAt,
         },
       ])
-      .select('id, code, role, expires_at')
+      .select('code, role, expires_at')
       .single();
 
     if (error || !data) {
       throw new Error(error?.message || 'Could not create invite link.');
     }
 
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
     return {
-      id: data.id,
+      id: data.code,
       code: data.code,
       role: data.role === 'editor' ? 'editor' : 'viewer',
-      inviteUrl: `${origin}/#/join/${data.code}`,
+      inviteUrl: `${PUBLIC_SITE_URL}/#/join/${data.code}`,
       expiresAt: data.expires_at,
     };
   } catch (err: any) {
@@ -502,11 +576,51 @@ export async function createAlbumInvite(params: {
   }
 }
 
+export async function fetchActiveAlbumInvites(albumId: string): Promise<AlbumInviteResult[]> {
+  ensureConfigured();
+  const nowIso = new Date().toISOString();
+
+  try {
+    let res = await supabase
+      .from('album_invites')
+      .select('code, role, expires_at')
+      .eq('album_id', albumId)
+      .gt('expires_at', nowIso)
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (res.error && isMissingColumnError(res.error)) {
+      res = await supabase
+        .from('album_invites')
+        .select('code, role, expires_at')
+        .eq('album_id', albumId)
+        .gt('expires_at', nowIso)
+        .limit(5);
+    }
+
+    if (res.error) {
+      console.warn('Could not load active album invites:', res.error.message);
+      return [];
+    }
+
+    return (res.data || []).map((row: any) => ({
+      id: row.id || row.code,
+      code: row.code,
+      role: row.role === 'editor' ? 'editor' : 'viewer',
+      inviteUrl: `${PUBLIC_SITE_URL}/#/join/${row.code}`,
+      expiresAt: row.expires_at,
+    }));
+  } catch (err) {
+    console.warn('Error loading active album invites:', err);
+    return [];
+  }
+}
+
 export async function acceptAlbumInvite(code: string): Promise<string> {
   ensureConfigured();
   const cleanCode = code.trim();
   if (!cleanCode) {
-    throw new Error('Invite is invalid or expired');
+    throw new Error('This invite is not valid or has expired');
   }
 
   try {
@@ -515,13 +629,13 @@ export async function acceptAlbumInvite(code: string): Promise<string> {
     });
 
     if (error || !data) {
-      throw new Error('Invite is invalid or expired');
+      throw new Error('This invite is not valid or has expired');
     }
 
     return String(data);
   } catch (err: any) {
     console.error('Error accepting invite:', err);
-    throw new Error('Invite is invalid or expired');
+    throw new Error('This invite is not valid or has expired');
   }
 }
 
@@ -554,37 +668,71 @@ export async function addCollectionItemToSharedAlbum(params: {
       }
     }
 
-    const { data, error } = await supabase
-      .from('shared_album_items')
-      .insert([
-        {
-          album_id: albumId,
-          added_by: userId,
-          collection_item_id: collectionItem.id,
-          species_name: collectionItem.commonName,
-          scientific_name: collectionItem.scientificName || '',
-          photo_url: signedOrPublicPhotoUrl,
-        },
-      ])
-      .select('id, album_id, added_by, collection_item_id, species_name, scientific_name, photo_url, created_at')
-      .single();
+    const insertPayload: Record<string, any> = {
+      album_id: albumId,
+      added_by: userId,
+      collection_item_id: collectionItem.id,
+      species_name: collectionItem.commonName,
+      scientific_name: collectionItem.scientificName || '',
+      photo_url: signedOrPublicPhotoUrl,
+    };
+    let selectCols = [
+      'id',
+      'album_id',
+      'added_by',
+      'collection_item_id',
+      'species_name',
+      'scientific_name',
+      'photo_url',
+      'created_at',
+    ];
 
-    if (error || !data) {
-      throw new Error(error?.message || 'Could not add item to album.');
+    let insertedData: any = null;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const res = await supabase
+        .from('shared_album_items')
+        .insert([insertPayload])
+        .select(selectCols.join(', '))
+        .single();
+
+      if (!res.error && res.data) {
+        insertedData = res.data;
+        break;
+      }
+
+      if (res.error && isMissingColumnError(res.error)) {
+        const missingCol = extractMissingColumnName(res.error);
+        if (missingCol && (missingCol in insertPayload || selectCols.includes(missingCol))) {
+          delete insertPayload[missingCol];
+          selectCols = selectCols.filter((c) => c !== missingCol);
+          continue;
+        }
+        if ('collection_item_id' in insertPayload || selectCols.includes('collection_item_id')) {
+          delete insertPayload.collection_item_id;
+          selectCols = selectCols.filter((c) => c !== 'collection_item_id');
+          continue;
+        }
+      }
+
+      throw new Error(res.error?.message || 'Could not add item to album.');
+    }
+
+    if (!insertedData) {
+      throw new Error('Could not add item to album.');
     }
 
     const profiles = await fetchPublicProfilesMap([userId]);
     const adder = profiles.get(userId);
 
     return {
-      id: data.id,
-      albumId: data.album_id,
-      addedBy: data.added_by,
-      collectionItemId: data.collection_item_id || null,
-      speciesName: data.species_name,
-      scientificName: data.scientific_name || '',
-      photoUrl: data.photo_url || '',
-      createdAt: data.created_at,
+      id: insertedData.id || `${albumId}-${userId}-${Date.now()}`,
+      albumId: insertedData.album_id,
+      addedBy: insertedData.added_by,
+      collectionItemId: insertedData.collection_item_id || null,
+      speciesName: insertedData.species_name,
+      scientificName: insertedData.scientific_name || '',
+      photoUrl: insertedData.photo_url || '',
+      createdAt: insertedData.created_at || new Date().toISOString(),
       addedByName: adder?.username || adder?.displayName || 'You',
     };
   } catch (err: any) {

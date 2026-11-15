@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import type { User as SupabaseUser } from '@supabase/supabase-js';
+import {
+  FavoriteSpeciesItem,
+  fetchMyUserPrivate,
+  upsertMyUserPrivate,
+} from '../services/userPrivateService';
+
+export type { FavoriteSpeciesItem };
 
 export interface AuthUser {
   uid: string; // alias to id for 100% backward compatibility
@@ -13,13 +20,6 @@ export interface AuthUser {
 // Compatibility export
 export type User = AuthUser;
 
-export interface FavoriteSpeciesItem {
-  id: number;
-  commonName: string;
-  scientificName: string;
-  photoUrl?: string;
-}
-
 export interface OnboardingSavePayload {
   interests: string[];
   favoriteSpecies: FavoriteSpeciesItem[];
@@ -27,6 +27,7 @@ export interface OnboardingSavePayload {
   locationConsent: boolean;
   homeLat: number | null;
   homeLng: number | null;
+  homeLabel?: string;
 }
 
 export interface UserProfile {
@@ -42,6 +43,7 @@ export interface UserProfile {
   locationConsent: boolean;
   homeLat: number | null;
   homeLng: number | null;
+  homeLabel: string;
   notInterestedIds: number[];
   experienceLevel?: 'novice' | 'enthusiast' | 'researcher';
   favoriteTaxa?: string;
@@ -74,46 +76,6 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-function roundCoord(value: number | null | undefined): number | null {
-  if (typeof value !== 'number' || Number.isNaN(value)) return null;
-  return Math.round(value * 100) / 100;
-}
-
-function parseFavoriteSpecies(raw: unknown): FavoriteSpeciesItem[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((item): FavoriteSpeciesItem | null => {
-      if (!item || typeof item !== 'object') return null;
-      const obj = item as Record<string, unknown>;
-      const id = typeof obj.id === 'number' ? obj.id : Number(obj.id);
-      const commonName = typeof obj.commonName === 'string'
-        ? obj.commonName
-        : typeof obj.common_name === 'string'
-        ? obj.common_name
-        : typeof obj.name === 'string'
-        ? obj.name
-        : '';
-      const scientificName = typeof obj.scientificName === 'string'
-        ? obj.scientificName
-        : typeof obj.scientific_name === 'string'
-        ? obj.scientific_name
-        : '';
-      if (!commonName && !scientificName) return null;
-      return {
-        id: Number.isFinite(id) ? id : 0,
-        commonName: commonName || scientificName,
-        scientificName: scientificName || commonName,
-        photoUrl:
-          typeof obj.photoUrl === 'string'
-            ? obj.photoUrl
-            : typeof obj.photo_url === 'string'
-            ? obj.photo_url
-            : undefined,
-      };
-    })
-    .filter((x): x is FavoriteSpeciesItem => x !== null);
-}
 
 const NOT_INTERESTED_KEY_PREFIX = 'wilddex_not_interested_';
 
@@ -177,54 +139,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   };
 
-  // Sync user profile document from Supabase profiles table
+  // Sync public profile columns from profiles and sensitive onboarding/location data from user_private
   const fetchUserProfile = async (authUser: AuthUser) => {
     if (!isSupabaseConfigured) {
       return;
     }
 
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', authUser.id)
-        .maybeSingle();
+      const [profileRes, privateData] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('id, username, display_name, avatar_url, bio, is_public, not_interested_taxa, created_at')
+          .eq('id', authUser.id)
+          .maybeSingle(),
+        fetchMyUserPrivate(),
+      ]);
+
+      const { data, error } = profileRes;
 
       if (error && error.code !== 'PGRST116') {
         console.warn('Error querying profiles table:', error);
       }
 
+      const onboardingDone = privateData?.onboardingDone === true;
+      const interests = privateData?.interests ?? [];
+      const favoriteSpecies = privateData?.favoriteSpecies ?? [];
+      const locationConsent = Boolean(privateData?.locationConsent);
+      const homeLat = locationConsent ? privateData?.homeLat ?? null : null;
+      const homeLng = locationConsent ? privateData?.homeLng ?? null : null;
+      const homeLabel = locationConsent ? privateData?.homeLabel ?? '' : '';
+      const locationSummary =
+        homeLat !== null && homeLng !== null
+          ? homeLabel
+            ? `${homeLabel} (~${homeLat.toFixed(2)}, ${homeLng.toFixed(2)})`
+            : `Near ${homeLat.toFixed(2)}, ${homeLng.toFixed(2)}`
+          : 'Location not set';
+
       if (data) {
         const resolvedName = data.display_name || authUser.displayName;
         const resolvedPhoto = data.avatar_url || authUser.photoURL;
-        const onboardingDone = data.onboarding_done === true;
-        const interests = Array.isArray(data.interests)
-          ? data.interests.filter((x: unknown): x is string => typeof x === 'string')
-          : [];
-        const favoriteSpecies = parseFavoriteSpecies(data.favorite_species);
-        const locationConsent = Boolean(data.location_consent);
-        const rawHomeLoc =
-          data.home_location && typeof data.home_location === 'object'
-            ? (data.home_location as Record<string, unknown>)
-            : null;
-        const homeLat = roundCoord(
-          typeof data.home_lat === 'number'
-            ? data.home_lat
-            : typeof rawHomeLoc?.lat === 'number'
-            ? rawHomeLoc.lat
-            : null
-        );
-        const homeLng = roundCoord(
-          typeof data.home_lng === 'number'
-            ? data.home_lng
-            : typeof rawHomeLoc?.lng === 'number'
-            ? rawHomeLoc.lng
-            : null
-        );
-        const locationSummary =
-          homeLat !== null && homeLng !== null
-            ? `Near ${homeLat.toFixed(2)}, ${homeLng.toFixed(2)}`
-            : 'Location not set';
         const remoteDismissed = parseNotInterestedIds(data.not_interested_taxa);
         const localDismissed = getLocalNotInterestedIds(authUser.id);
         const mergedDismissed = Array.from(new Set([...remoteDismissed, ...localDismissed]));
@@ -252,6 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           locationConsent,
           homeLat,
           homeLng,
+          homeLabel,
           notInterestedIds: mergedDismissed,
           experienceLevel: 'enthusiast',
           favoriteTaxa: interests.length > 0 ? interests.join(', ') : 'All Kingdoms',
@@ -262,25 +216,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
       } else {
         const localDismissed = getLocalNotInterestedIds(authUser.id);
-        // Upsert initial profile if trigger has not executed yet
+        // Upsert initial public profile if trigger has not executed yet
         const initialProfile: UserProfile = {
           id: authUser.id,
           email: authUser.email || '',
           displayName: authUser.displayName || 'Nature Explorer',
           photoURL: authUser.photoURL || '',
           isPublic: true,
-          onboardingCompleted: false,
-          onboardingDone: false,
-          interests: [],
-          favoriteSpecies: [],
-          locationConsent: false,
-          homeLat: null,
-          homeLng: null,
+          onboardingCompleted: onboardingDone,
+          onboardingDone,
+          interests,
+          favoriteSpecies,
+          locationConsent,
+          homeLat,
+          homeLng,
+          homeLabel,
           notInterestedIds: localDismissed,
           experienceLevel: 'enthusiast',
-          favoriteTaxa: 'All Kingdoms',
+          favoriteTaxa: interests.length > 0 ? interests.join(', ') : 'All Kingdoms',
           bio: 'Exploring biodiversity with WildDex.',
-          location: 'Location not set',
+          location: locationSummary,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         };
@@ -293,7 +248,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               avatar_url: initialProfile.photoURL,
               bio: initialProfile.bio,
               is_public: true,
-              onboarding_done: false,
             },
           ],
           { onConflict: 'id', ignoreDuplicates: true }
@@ -405,7 +359,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 display_name: cleanUsername,
                 bio: 'Exploring biodiversity with WildDex.',
                 is_public: true,
-                onboarding_done: false,
               },
             ],
             { onConflict: 'id', ignoreDuplicates: true }
@@ -413,6 +366,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           if (profileError) {
             console.warn('[Supabase Profile Upsert Warning]:', profileError);
+          }
+
+          if (data.session) {
+            await supabase.from('user_private').upsert(
+              [
+                {
+                  user_id: data.user.id,
+                  onboarding_done: false,
+                },
+              ],
+              { onConflict: 'user_id', ignoreDuplicates: true }
+            );
           }
         } catch (profileErr) {
           console.warn('[Supabase Profile Upsert Exception]:', profileErr);
@@ -525,83 +490,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const saveOnboardingPreferences = async (payload: OnboardingSavePayload) => {
-    const roundedLat = payload.locationConsent ? roundCoord(payload.homeLat) : null;
-    const roundedLng = payload.locationConsent ? roundCoord(payload.homeLng) : null;
-
-    if (!isSupabaseConfigured) {
-      throw new Error('Supabase is not configured. Please check your environment settings.');
-    }
-
-    const { data: userRes, error: authErr } = await supabase.auth.getUser();
-    if (authErr || !userRes?.user) {
-      throw new Error('Please sign in to save your preferences.');
-    }
-
-    const userId = userRes.user.id;
-    const dbPayload: Record<string, any> = {
-      id: userId,
-      interests: payload.interests,
-      favorite_species: payload.favoriteSpecies,
-      onboarding_done: payload.onboardingDone,
-      location_consent: payload.locationConsent,
-      home_lat: roundedLat,
-      home_lng: roundedLng,
-    };
-
-    const { error } = await supabase
-      .from('profiles')
-      .upsert([dbPayload], { onConflict: 'id' });
-
-    if (error) {
-      // Fallback if the table stores rounded home coordinates inside a single home_location JSON column
-      if (
-        error.code === 'PGRST204' ||
-        error.code === '42703' ||
-        error.message?.toLowerCase().includes('home_lat') ||
-        error.message?.toLowerCase().includes('home_lng')
-      ) {
-        const fallbackPayload = {
-          id: userId,
-          interests: payload.interests,
-          favorite_species: payload.favoriteSpecies,
-          onboarding_done: payload.onboardingDone,
-          location_consent: payload.locationConsent,
-          home_location:
-            roundedLat !== null && roundedLng !== null
-              ? { lat: roundedLat, lng: roundedLng }
-              : null,
-        };
-        const { error: fallbackError } = await supabase
-          .from('profiles')
-          .upsert([fallbackPayload], { onConflict: 'id' });
-        if (fallbackError) {
-          console.error('Supabase saveOnboardingPreferences fallback error:', fallbackError);
-          throw new Error(fallbackError.message || 'Could not save your preferences.');
-        }
-      } else {
-        console.error('Supabase saveOnboardingPreferences error:', error);
-        throw new Error(error.message || 'Could not save your preferences.');
-      }
-    }
+    const saved = await upsertMyUserPrivate(payload);
 
     const locationSummary =
-      roundedLat !== null && roundedLng !== null
-        ? `Near ${roundedLat.toFixed(2)}, ${roundedLng.toFixed(2)}`
+      saved.homeLat !== null && saved.homeLng !== null
+        ? saved.homeLabel
+          ? `${saved.homeLabel} (~${saved.homeLat.toFixed(2)}, ${saved.homeLng.toFixed(2)})`
+          : `Near ${saved.homeLat.toFixed(2)}, ${saved.homeLng.toFixed(2)}`
         : 'Location not set';
 
     setUserProfile((prev) =>
       prev
         ? {
             ...prev,
-            onboardingCompleted: payload.onboardingDone,
-            onboardingDone: payload.onboardingDone,
-            interests: payload.interests,
-            favoriteSpecies: payload.favoriteSpecies,
-            locationConsent: payload.locationConsent,
-            homeLat: roundedLat,
-            homeLng: roundedLng,
+            onboardingCompleted: saved.onboardingDone,
+            onboardingDone: saved.onboardingDone,
+            interests: saved.interests,
+            favoriteSpecies: saved.favoriteSpecies,
+            locationConsent: saved.locationConsent,
+            homeLat: saved.homeLat,
+            homeLng: saved.homeLng,
+            homeLabel: saved.homeLabel,
             favoriteTaxa:
-              payload.interests.length > 0 ? payload.interests.join(', ') : 'All Kingdoms',
+              saved.interests.length > 0 ? saved.interests.join(', ') : 'All Kingdoms',
             location: locationSummary,
           }
         : null

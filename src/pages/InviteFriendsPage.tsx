@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { PUBLIC_SITE_URL } from '../services/sharedAlbumService';
 
 export const InviteFriendsPage: React.FC = () => {
   const navigate = useNavigate();
   const [copied, setCopied] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
-  const inviteLink = 'https://wilddex.app/join/maya-pnw-782';
+  const inviteLink = PUBLIC_SITE_URL;
 
   const showToast = (msg: string) => {
     setToast(msg);

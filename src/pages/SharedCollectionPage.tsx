@@ -9,9 +9,11 @@ import {
   InviteRole,
   SharedAlbumItem,
   SharedAlbumSummary,
+  acceptAlbumInvite,
   addCollectionItemToSharedAlbum,
   createAlbumInvite,
   createSharedAlbum,
+  fetchActiveAlbumInvites,
   fetchAlbumDetail,
   fetchMyAndSharedAlbums,
   removeOrLeaveAlbumMember,
@@ -93,6 +95,12 @@ export const SharedCollectionPage: React.FC = () => {
   const [creatingAlbum, setCreatingAlbum] = useState(false);
   const [createAlbumError, setCreateAlbumError] = useState<string | null>(null);
 
+  // Join by invite code modal
+  const [joinModalOpen, setJoinModalOpen] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joiningByCode, setJoiningByCode] = useState(false);
+  const [joinByCodeError, setJoinByCodeError] = useState<string | null>(null);
+
   // =========================================================================
   // ALBUM DETAIL STATE (/shared-collection/:albumId)
   // =========================================================================
@@ -100,11 +108,13 @@ export const SharedCollectionPage: React.FC = () => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  // Invite modal (Owner only)
+  // Invite & Joining Code modals/state (Owner only)
   const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [codeModalOpen, setCodeModalOpen] = useState(false);
   const [inviteRole, setInviteRole] = useState<InviteRole>('editor');
   const [inviteCreating, setInviteCreating] = useState(false);
   const [inviteResult, setInviteResult] = useState<AlbumInviteResult | null>(null);
+  const [activeCodeInvite, setActiveCodeInvite] = useState<AlbumInviteResult | null>(null);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
   // Add item from collection modal (Owner & Editors only)
@@ -141,6 +151,26 @@ export const SharedCollectionPage: React.FC = () => {
     try {
       const data = await fetchAlbumDetail(albumId, currentUser.id);
       setDetail(data);
+      if (data.album.myRole === 'owner') {
+        const activeInvites = await fetchActiveAlbumInvites(albumId);
+        let latest: AlbumInviteResult | null = activeInvites[0] || null;
+        if (!latest) {
+          try {
+            latest = await createAlbumInvite({
+              albumId,
+              userId: currentUser.id,
+              role: 'editor',
+            });
+          } catch {
+            latest = null;
+          }
+        }
+        setActiveCodeInvite(latest);
+        setInviteResult(latest);
+      } else {
+        setActiveCodeInvite(null);
+        setInviteResult(null);
+      }
     } catch (err: any) {
       setDetailError(err?.message || 'Could not load this shared album.');
       setDetail(null);
@@ -193,18 +223,52 @@ export const SharedCollectionPage: React.FC = () => {
     }
   };
 
-  // Generate invite link (Owner only)
-  const handleGenerateInvite = async () => {
+  const handleJoinByCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+
+    const raw = joinCodeInput.trim();
+    const urlMatch = raw.match(/\/join\/([^/?#]+)/i);
+    const cleanCode = decodeURIComponent((urlMatch?.[1] || raw).trim());
+
+    if (!cleanCode) {
+      setJoinByCodeError('Please paste an invite code or link.');
+      return;
+    }
+
+    setJoiningByCode(true);
+    setJoinByCodeError(null);
+    try {
+      const joinedAlbumId = await acceptAlbumInvite(cleanCode);
+      setJoinModalOpen(false);
+      setJoinCodeInput('');
+      showToast('Joined shared album!');
+      navigate(`/shared-collection/${joinedAlbumId}`);
+    } catch (err: any) {
+      setJoinByCodeError(err?.message || 'Invite is invalid or expired');
+    } finally {
+      setJoiningByCode(false);
+    }
+  };
+
+  // Generate invite link & code (Owner only)
+  const handleGenerateInvite = async (roleOverride?: InviteRole) => {
     if (!currentUser || !detail) return;
+    const roleToUse = roleOverride || inviteRole;
     setInviteCreating(true);
     setInviteError(null);
     try {
       const res = await createAlbumInvite({
         albumId: detail.album.id,
         userId: currentUser.id,
-        role: inviteRole,
+        role: roleToUse,
       });
       setInviteResult(res);
+      setActiveCodeInvite(res);
+      showToast('Invite code & link ready!');
     } catch (err: any) {
       setInviteError(err?.message || 'Could not create invite link.');
     } finally {
@@ -212,24 +276,24 @@ export const SharedCollectionPage: React.FC = () => {
     }
   };
 
-  const copyInviteUrl = async (url: string) => {
+  const copyInviteUrl = async (text: string, successMessage = 'Invite link copied!') => {
     try {
       if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-        await navigator.clipboard.writeText(url);
-        showToast('Invite link copied!');
+        await navigator.clipboard.writeText(text);
+        showToast(successMessage);
         return;
       }
       const textarea = document.createElement('textarea');
-      textarea.value = url;
+      textarea.value = text;
       textarea.style.position = 'fixed';
       textarea.style.opacity = '0';
       document.body.appendChild(textarea);
       textarea.select();
       document.execCommand('copy');
       document.body.removeChild(textarea);
-      showToast('Invite link copied!');
+      showToast(successMessage);
     } catch {
-      showToast('Could not copy automatically. Please copy the link text.');
+      showToast('Could not copy automatically. Please copy manually.');
     }
   };
 
@@ -421,19 +485,32 @@ export const SharedCollectionPage: React.FC = () => {
           </span>
           <div className="flex items-center gap-2 shrink-0">
             {isOwner && (
-              <button
-                type="button"
-                onClick={() => {
-                  setInviteResult(null);
-                  setInviteError(null);
-                  setInviteRole('editor');
-                  setInviteModalOpen(true);
-                }}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold shadow-sm active:scale-95 transition-transform"
-              >
-                <span className="material-symbols-outlined text-[18px]">person_add</span>
-                <span>Invite</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInviteError(null);
+                    setCodeModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-primary-container/30 text-primary font-label-md text-label-md font-semibold shadow-sm active:scale-95 transition-transform"
+                >
+                  <span className="material-symbols-outlined text-[18px]">key</span>
+                  <span>Code</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInviteResult(activeCodeInvite);
+                    setInviteError(null);
+                    setInviteRole(activeCodeInvite?.role || 'editor');
+                    setInviteModalOpen(true);
+                  }}
+                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold shadow-sm active:scale-95 transition-transform"
+                >
+                  <span className="material-symbols-outlined text-[18px]">person_add</span>
+                  <span>Invite</span>
+                </button>
+              </>
             )}
             {!isOwner && detail && (
               <button
@@ -556,6 +633,144 @@ export const SharedCollectionPage: React.FC = () => {
                 </div>
               )}
             </div>
+
+            {/* Separate Side-by-Side Invite & Joining Code Sections (Owner only) */}
+            {isOwner && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* Invite Section */}
+                <div className="p-3.5 sm:p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20 shadow-sm flex flex-col justify-between gap-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[20px] text-secondary">person_add</span>
+                        <span>Invite Link</span>
+                      </h2>
+                      <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+                        Send a direct invite link for friends to join this album.
+                      </p>
+                    </div>
+                  </div>
+
+                  {activeCodeInvite ? (
+                    <div className="space-y-2">
+                      <div className="px-3 py-2 rounded-xl bg-surface-container text-on-surface font-mono text-xs break-all select-all">
+                        {activeCodeInvite.inviteUrl}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => copyInviteUrl(activeCodeInvite.inviteUrl)}
+                          className="flex-1 min-h-[38px] px-3 rounded-full bg-surface-container-high text-on-surface font-label-sm font-semibold flex items-center justify-center gap-1.5"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                          <span>Copy Link</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => shareInviteUrl(activeCodeInvite.inviteUrl, detail.album.name)}
+                          className="flex-1 min-h-[38px] px-3 rounded-full bg-secondary-container text-on-secondary-container font-label-sm font-semibold flex items-center justify-center gap-1.5"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">share</span>
+                          <span>Share</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInviteResult(activeCodeInvite);
+                            setInviteError(null);
+                            setInviteRole(activeCodeInvite.role);
+                            setInviteModalOpen(true);
+                          }}
+                          className="min-h-[38px] px-3 rounded-full bg-surface-container text-on-surface font-label-sm font-semibold"
+                        >
+                          New Link
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInviteResult(null);
+                        setInviteError(null);
+                        setInviteRole('editor');
+                        setInviteModalOpen(true);
+                      }}
+                      className="w-full min-h-[40px] px-4 rounded-full bg-secondary-container text-on-secondary-container font-label-md font-semibold flex items-center justify-center gap-1.5"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">link</span>
+                      <span>Create Invite Link</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Joining Code Section (beside Invite) */}
+                <div className="p-3.5 sm:p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20 shadow-sm flex flex-col justify-between gap-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold flex items-center gap-1.5">
+                        <span className="material-symbols-outlined text-[20px] text-primary">key</span>
+                        <span>Joining Code</span>
+                      </h2>
+                      <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+                        Friends can enter this code in Shared Collection &rarr; Join with code.
+                      </p>
+                    </div>
+                    {activeCodeInvite && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold shrink-0">
+                        {activeCodeInvite.role === 'editor' ? 'Editor' : 'Viewer'}
+                      </span>
+                    )}
+                  </div>
+
+                  {activeCodeInvite ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-surface-container">
+                      <span className="font-mono text-base sm:text-lg font-bold tracking-wider text-on-surface select-all">
+                        {activeCodeInvite.code}
+                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => copyInviteUrl(activeCodeInvite.code, 'Joining code copied!')}
+                          className="px-3.5 min-h-[36px] rounded-full bg-primary text-on-primary font-label-sm font-semibold flex items-center gap-1.5"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                          <span>Copy Code</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={inviteCreating}
+                          onClick={() => handleGenerateInvite(inviteRole)}
+                          className="px-3 min-h-[36px] rounded-full bg-surface-container-high text-on-surface font-label-sm font-semibold disabled:opacity-60"
+                        >
+                          {inviteCreating ? '...' : 'New'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={inviteCreating}
+                        onClick={() => handleGenerateInvite('editor')}
+                        className="flex-1 min-h-[40px] px-3.5 rounded-full bg-primary text-on-primary font-label-md font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">key</span>
+                        <span>{inviteCreating ? 'Creating...' : 'Get Editor Code'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={inviteCreating}
+                        onClick={() => handleGenerateInvite('viewer')}
+                        className="min-h-[40px] px-3.5 rounded-full bg-surface-container-high text-on-surface font-label-md font-semibold disabled:opacity-60"
+                      >
+                        Viewer Code
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Members Card */}
             <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low border border-outline-variant/15 shadow-sm flex flex-col gap-2.5">
@@ -808,7 +1023,7 @@ export const SharedCollectionPage: React.FC = () => {
                 <button
                   type="button"
                   disabled={inviteCreating}
-                  onClick={handleGenerateInvite}
+                  onClick={() => handleGenerateInvite()}
                   className="w-full h-11 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm disabled:opacity-60"
                 >
                   {inviteCreating ? 'Creating Invite Link...' : 'Create Invite Link'}
@@ -820,6 +1035,23 @@ export const SharedCollectionPage: React.FC = () => {
                   </p>
                   <div className="px-3 py-2 rounded-lg bg-surface-container text-on-surface font-mono text-xs break-all select-all">
                     {inviteResult.inviteUrl}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-surface-container/60">
+                    <div className="min-w-0">
+                      <span className="font-label-sm text-[11px] text-on-surface-variant block">
+                        Invite code
+                      </span>
+                      <span className="font-mono text-sm font-bold text-on-surface select-all">
+                        {inviteResult.code}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyInviteUrl(inviteResult.code, 'Joining code copied!')}
+                      className="px-3 py-1.5 rounded-full bg-surface-container-high text-on-surface font-label-sm text-label-sm font-semibold shrink-0"
+                    >
+                      Copy Code
+                    </button>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -841,8 +1073,106 @@ export const SharedCollectionPage: React.FC = () => {
                       <span>Share</span>
                     </button>
                   </div>
+                  <p className="font-body-sm text-[11px] text-on-surface-variant leading-relaxed">
+                    Friends can open the link if your app is shared publicly, or paste the invite code in Shared Collection &rarr; Join with code.
+                  </p>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Joining Code Quick Modal (Owner only) */}
+        {codeModalOpen && isOwner && (
+          <div
+            className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Album Joining Code"
+          >
+            <div className="w-full max-w-md rounded-2xl bg-surface p-5 shadow-2xl border border-outline-variant/25 flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold">
+                  Joining Code
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setCodeModalOpen(false)}
+                  aria-label="Close code modal"
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container"
+                >
+                  <span className="material-symbols-outlined text-[20px]">close</span>
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-label-md text-label-md text-on-surface font-semibold">
+                  Role for New Code
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setInviteRole('editor')}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      inviteRole === 'editor'
+                        ? 'border-primary bg-primary-container/25 text-primary'
+                        : 'border-outline-variant/30 bg-surface-container-low text-on-surface'
+                    }`}
+                  >
+                    <p className="font-label-md font-bold">Editor</p>
+                    <p className="font-body-sm text-[11px] opacity-80">Can view &amp; add items</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInviteRole('viewer')}
+                    className={`p-2.5 rounded-xl border text-left transition-all ${
+                      inviteRole === 'viewer'
+                        ? 'border-primary bg-primary-container/25 text-primary'
+                        : 'border-outline-variant/30 bg-surface-container-low text-on-surface'
+                    }`}
+                  >
+                    <p className="font-label-md font-bold">Viewer</p>
+                    <p className="font-body-sm text-[11px] opacity-80">View items only</p>
+                  </button>
+                </div>
+              </div>
+
+              {activeCodeInvite && (
+                <div className="p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/25 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="font-label-sm text-[11px] text-on-surface-variant block">
+                      Active {activeCodeInvite.role === 'editor' ? 'Editor' : 'Viewer'} code
+                    </span>
+                    <span className="font-mono text-lg font-bold tracking-wider text-on-surface select-all">
+                      {activeCodeInvite.code}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => copyInviteUrl(activeCodeInvite.code, 'Joining code copied!')}
+                    className="px-4 py-2 rounded-full bg-primary text-on-primary font-label-md font-semibold shrink-0"
+                  >
+                    Copy Code
+                  </button>
+                </div>
+              )}
+
+              {inviteError && (
+                <p className="font-body-sm text-body-sm text-error">{inviteError}</p>
+              )}
+
+              <button
+                type="button"
+                disabled={inviteCreating}
+                onClick={() => handleGenerateInvite(inviteRole)}
+                className="w-full h-11 rounded-full bg-secondary-container text-on-secondary-container font-label-md font-semibold disabled:opacity-60"
+              >
+                {inviteCreating
+                  ? 'Creating Code...'
+                  : activeCodeInvite
+                  ? `Generate New ${inviteRole === 'editor' ? 'Editor' : 'Viewer'} Code`
+                  : `Generate ${inviteRole === 'editor' ? 'Editor' : 'Viewer'} Code`}
+              </button>
             </div>
           </div>
         )}
@@ -965,19 +1295,33 @@ export const SharedCollectionPage: React.FC = () => {
             Albums you own and albums shared with you
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => {
-            setCreateAlbumError(null);
-            setNewAlbumName('');
-            setNewAlbumDesc('');
-            setCreateModalOpen(true);
-          }}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm active:scale-95 transition-transform shrink-0"
-        >
-          <span className="material-symbols-outlined text-[18px]">create_new_folder</span>
-          <span>New shared album</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setJoinByCodeError(null);
+              setJoinCodeInput('');
+              setJoinModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-secondary-container text-on-secondary-container font-label-md font-semibold shadow-sm active:scale-95 transition-transform shrink-0"
+          >
+            <span className="material-symbols-outlined text-[18px]">key</span>
+            <span>Join with code</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setCreateAlbumError(null);
+              setNewAlbumName('');
+              setNewAlbumDesc('');
+              setCreateModalOpen(true);
+            }}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm active:scale-95 transition-transform shrink-0"
+          >
+            <span className="material-symbols-outlined text-[18px]">create_new_folder</span>
+            <span>New shared album</span>
+          </button>
+        </div>
       </div>
 
       {/* Loading Skeletons */}
@@ -1193,6 +1537,69 @@ export const SharedCollectionPage: React.FC = () => {
                 className="px-5 py-2 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm disabled:opacity-60"
               >
                 {creatingAlbum ? 'Creating...' : 'Create Album'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+      {/* Join by Invite Code Modal */}
+      {joinModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/55 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Join shared album with code"
+        >
+          <form
+            onSubmit={handleJoinByCode}
+            className="w-full max-w-md rounded-2xl bg-surface p-5 shadow-2xl border border-outline-variant/25 flex flex-col gap-4"
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold">
+                Join shared album
+              </h2>
+              <button
+                type="button"
+                onClick={() => setJoinModalOpen(false)}
+                aria-label="Close modal"
+                className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              <label className="font-label-md text-label-md text-on-surface font-semibold">
+                Invite code or link
+              </label>
+              <input
+                type="text"
+                required
+                value={joinCodeInput}
+                onChange={(e) => setJoinCodeInput(e.target.value)}
+                placeholder="Paste invite code or link"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-low text-on-surface border border-outline-variant/30 font-body-md focus:outline-none focus:border-primary"
+              />
+            </div>
+
+            {joinByCodeError && (
+              <p className="font-body-sm text-body-sm text-error">{joinByCodeError}</p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setJoinModalOpen(false)}
+                className="px-4 py-2 rounded-full bg-surface-container text-on-surface font-label-md font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={joiningByCode}
+                className="px-5 py-2 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm disabled:opacity-60"
+              >
+                {joiningByCode ? 'Joining...' : 'Join Album'}
               </button>
             </div>
           </form>

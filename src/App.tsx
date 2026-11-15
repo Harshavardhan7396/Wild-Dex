@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 import { HomePage } from './pages/HomePage';
 import { ExplorePage } from './pages/ExplorePage';
@@ -24,11 +24,45 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
 import { SplashScreen } from './components/auth/SplashScreen';
 
+function PendingInviteRedirect({ enabled }: { enabled: boolean }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!enabled) return;
+    let pendingCode = '';
+    try {
+      pendingCode = sessionStorage.getItem('wilddex_pending_join_code') || '';
+    } catch {}
+
+    if (pendingCode && !location.pathname.startsWith('/join/')) {
+      navigate(`/join/${encodeURIComponent(pendingCode)}`, { replace: true });
+    }
+  }, [enabled, location.pathname, navigate]);
+
+  return null;
+}
+
 function AppContent() {
   const { currentUser, userProfile, loading: authLoading, isGuest } = useAuth();
   const [showSplash, setShowSplash] = useState(true);
   const [isExitingSplash, setIsExitingSplash] = useState(false);
   const mountTimeRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const savePendingJoinCodeFromHash = () => {
+      const match = window.location.hash.match(/^#\/join\/([^/?#]+)/);
+      if (match?.[1]) {
+        try {
+          sessionStorage.setItem('wilddex_pending_join_code', decodeURIComponent(match[1]));
+        } catch {}
+      }
+    };
+    savePendingJoinCodeFromHash();
+    window.addEventListener('hashchange', savePendingJoinCodeFromHash);
+    return () => window.removeEventListener('hashchange', savePendingJoinCodeFromHash);
+  }, []);
 
   useEffect(() => {
     const prefersReducedMotion =
@@ -111,6 +145,7 @@ function AppContent() {
   // 5. User is signed in with onboarding done (or continuing as guest) -> full app experience
   return (
     <HashRouter>
+      <PendingInviteRedirect enabled={Boolean(currentUser && userProfile?.onboardingCompleted)} />
       <AuthModal />
       <Routes>
         <Route element={<AppLayout />}>

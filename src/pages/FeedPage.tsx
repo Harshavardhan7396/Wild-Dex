@@ -1,7 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { CollectionItem, getSupabaseUserCollection } from '../services/supabaseCollectionService';
+import {
+  AlbumInviteResult,
+  SharedAlbumSummary,
+  acceptAlbumInvite,
+  createAlbumInvite,
+  fetchActiveAlbumInvites,
+  fetchMyAndSharedAlbums,
+  getShareableAppOrigin,
+} from '../services/sharedAlbumService';
 import {
   COMMUNITY_PAGE_SIZE,
   CommunityPost,
@@ -64,6 +73,7 @@ const AvatarBadge: React.FC<{
 
 export const FeedPage: React.FC = () => {
   const { currentUser, userProfile, loading: authLoading, setAuthModalOpen } = useAuth();
+  const navigate = useNavigate();
 
   const [activeTab, setActiveTab] = useState<CommunityTab>('everyone');
   const [posts, setPosts] = useState<CommunityPost[]>([]);
@@ -121,6 +131,17 @@ export const FeedPage: React.FC = () => {
   const [composerSubmitting, setComposerSubmitting] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Invite & Joining Code state
+  const [invitePanelOpen, setInvitePanelOpen] = useState(false);
+  const [ownedAlbums, setOwnedAlbums] = useState<SharedAlbumSummary[]>([]);
+  const [selectedInviteAlbumId, setSelectedInviteAlbumId] = useState<string>('');
+  const [albumCodeInvite, setAlbumCodeInvite] = useState<AlbumInviteResult | null>(null);
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeCreating, setCodeCreating] = useState(false);
+  const [joinCodeValue, setJoinCodeValue] = useState('');
+  const [joiningAlbum, setJoiningAlbum] = useState(false);
+  const [joinCodeError, setJoinCodeError] = useState<string | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
 
@@ -301,31 +322,136 @@ export const FeedPage: React.FC = () => {
     await loadFeed(page + 1, true);
   };
 
-  // Invite button: Web Share API + copy link
-  const handleInvite = async () => {
-    const shareUrl = window.location.origin;
+  const copyShareText = async (text: string, successMessage: string) => {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(text);
+        showToast(successMessage);
+        return true;
+      }
+      const input = document.createElement('textarea');
+      input.value = text;
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+      input.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(input);
+      if (ok) showToast(successMessage);
+      return ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const loadAlbumInviteCode = useCallback(
+    async (albumId: string) => {
+      if (!currentUser || !albumId) return;
+      setCodeLoading(true);
+      try {
+        const active = await fetchActiveAlbumInvites(albumId);
+        let latest = active[0] || null;
+        if (!latest) {
+          latest = await createAlbumInvite({
+            albumId,
+            userId: currentUser.id,
+            role: 'editor',
+          });
+        }
+        setAlbumCodeInvite(latest);
+      } catch {
+        setAlbumCodeInvite(null);
+      } finally {
+        setCodeLoading(false);
+      }
+    },
+    [currentUser]
+  );
+
+  const openInviteAndCodePanel = useCallback(
+    async (toggleIfOpen = true) => {
+      if (toggleIfOpen && invitePanelOpen) {
+        setInvitePanelOpen(false);
+        return;
+      }
+      setInvitePanelOpen(true);
+      setJoinCodeError(null);
+      if (!currentUser) return;
+
+      setCodeLoading(true);
+      try {
+        const albums = await fetchMyAndSharedAlbums(currentUser.id);
+        const mine = albums.filter((a) => a.myRole === 'owner');
+        setOwnedAlbums(mine);
+        if (mine.length > 0) {
+          const targetId =
+            selectedInviteAlbumId && mine.some((a) => a.id === selectedInviteAlbumId)
+              ? selectedInviteAlbumId
+              : mine[0].id;
+          setSelectedInviteAlbumId(targetId);
+          await loadAlbumInviteCode(targetId);
+        } else {
+          setSelectedInviteAlbumId('');
+          setAlbumCodeInvite(null);
+        }
+      } catch {
+        setCodeLoading(false);
+      }
+    },
+    [currentUser, invitePanelOpen, selectedInviteAlbumId, loadAlbumInviteCode]
+  );
+
+  const handleGenerateNewFeedCode = async () => {
+    if (!currentUser || !selectedInviteAlbumId || codeCreating) return;
+    setCodeCreating(true);
+    try {
+      const created = await createAlbumInvite({
+        albumId: selectedInviteAlbumId,
+        userId: currentUser.id,
+        role: 'editor',
+      });
+      setAlbumCodeInvite(created);
+      showToast('New joining code created!');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not create joining code.');
+    } finally {
+      setCodeCreating(false);
+    }
+  };
+
+  const handleJoinAlbumByCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+    const raw = joinCodeValue.trim();
+    const urlMatch = raw.match(/\/join\/([^/?#]+)/i);
+    const cleanCode = decodeURIComponent((urlMatch?.[1] || raw).trim());
+    if (!cleanCode) {
+      setJoinCodeError('Please enter a joining code or invite link.');
+      return;
+    }
+
+    setJoiningAlbum(true);
+    setJoinCodeError(null);
+    try {
+      const albumId = await acceptAlbumInvite(cleanCode);
+      setJoinCodeValue('');
+      showToast('Joined shared album!');
+      navigate(`/shared-collection/${albumId}`);
+    } catch (err: any) {
+      setJoinCodeError(err?.message || 'This invite is not valid or has expired');
+    } finally {
+      setJoiningAlbum(false);
+    }
+  };
+
+  // Invite button: Shareable origin + Web Share API
+  const handleInviteShare = async (customUrl?: string) => {
+    const shareUrl = customUrl || getShareableAppOrigin();
     const shareTitle = 'Join me on WildDex';
     const shareText = 'Discover and share wildlife sightings with me on WildDex!';
-
-    const copyLink = async (): Promise<boolean> => {
-      try {
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-          await navigator.clipboard.writeText(shareUrl);
-          return true;
-        }
-        const input = document.createElement('textarea');
-        input.value = shareUrl;
-        input.style.position = 'fixed';
-        input.style.opacity = '0';
-        document.body.appendChild(input);
-        input.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(input);
-        return ok;
-      } catch {
-        return false;
-      }
-    };
 
     if (typeof navigator.share === 'function') {
       try {
@@ -334,20 +460,18 @@ export const FeedPage: React.FC = () => {
           text: shareText,
           url: shareUrl,
         });
-        const copied = await copyLink();
-        showToast(copied ? 'Invite shared & link copied!' : 'Invite shared!');
+        await copyShareText(shareUrl, 'Invite shared & link copied!');
         return;
       } catch (err: any) {
         if (err?.name === 'AbortError') {
-          const copied = await copyLink();
-          if (copied) showToast('Invite link copied!');
+          await copyShareText(shareUrl, 'Invite link copied!');
           return;
         }
       }
     }
 
-    const copied = await copyLink();
-    showToast(copied ? 'Invite link copied to clipboard!' : `Share this link: ${shareUrl}`);
+    const copied = await copyShareText(shareUrl, 'Invite link copied to clipboard!');
+    if (!copied) showToast(`Share this link: ${shareUrl}`);
   };
 
   // Composer: open & load user's collection items
@@ -804,14 +928,209 @@ export const FeedPage: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={handleInvite}
+            onClick={() => openInviteAndCodePanel(true)}
             className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold active:scale-95 transition-transform shadow-sm"
           >
             <span className="material-symbols-outlined text-[18px]">person_add</span>
             <span>Invite</span>
           </button>
+          <button
+            type="button"
+            onClick={() => openInviteAndCodePanel(true)}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-primary-container/30 text-primary font-label-md text-label-md font-semibold active:scale-95 transition-transform shadow-sm"
+          >
+            <span className="material-symbols-outlined text-[18px]">key</span>
+            <span>Code</span>
+          </button>
         </div>
       </section>
+
+      {/* Separate Invite & Joining Code Sections */}
+      {invitePanelOpen && (
+        <section className="px-3 sm:px-margin pb-2">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Invite Section */}
+            <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20 shadow-sm flex flex-col justify-between gap-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[20px] text-secondary">
+                      person_add
+                    </span>
+                    <span>Invite Link</span>
+                  </h2>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+                    {albumCodeInvite
+                      ? 'Share this album invite link with friends.'
+                      : 'Invite friends to explore sightings with you on WildDex.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setInvitePanelOpen(false)}
+                  aria-label="Close invite and code panel"
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container shrink-0"
+                >
+                  <span className="material-symbols-outlined text-[18px]">close</span>
+                </button>
+              </div>
+
+              <div className="px-3 py-2 rounded-xl bg-surface-container text-on-surface font-mono text-xs break-all select-all">
+                {albumCodeInvite ? albumCodeInvite.inviteUrl : getShareableAppOrigin()}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyShareText(
+                      albumCodeInvite ? albumCodeInvite.inviteUrl : getShareableAppOrigin(),
+                      'Invite link copied!'
+                    )
+                  }
+                  className="flex-1 min-h-[38px] px-3 rounded-full bg-surface-container-high text-on-surface font-label-sm font-semibold flex items-center justify-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">content_copy</span>
+                  <span>Copy Link</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleInviteShare(
+                      albumCodeInvite ? albumCodeInvite.inviteUrl : getShareableAppOrigin()
+                    )
+                  }
+                  className="flex-1 min-h-[38px] px-3 rounded-full bg-secondary-container text-on-secondary-container font-label-sm font-semibold flex items-center justify-center gap-1.5"
+                >
+                  <span className="material-symbols-outlined text-[16px]">share</span>
+                  <span>Share</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Separate Joining Code Section (beside Invite) */}
+            <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20 shadow-sm flex flex-col justify-between gap-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold flex items-center gap-1.5">
+                    <span className="material-symbols-outlined text-[20px] text-primary">key</span>
+                    <span>Joining Code</span>
+                  </h2>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+                    Share a code for your shared album or enter a friend&apos;s code to join.
+                  </p>
+                </div>
+                {albumCodeInvite && (
+                  <span className="px-2.5 py-0.5 rounded-full bg-primary/10 text-primary font-label-sm text-[11px] font-bold shrink-0">
+                    {albumCodeInvite.role === 'editor' ? 'Editor' : 'Viewer'}
+                  </span>
+                )}
+              </div>
+
+              {ownedAlbums.length > 0 ? (
+                <div className="space-y-2">
+                  {ownedAlbums.length > 1 && (
+                    <select
+                      value={selectedInviteAlbumId}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setSelectedInviteAlbumId(nextId);
+                        loadAlbumInviteCode(nextId);
+                      }}
+                      className="w-full px-3 py-1.5 rounded-xl bg-surface-container text-on-surface font-label-sm text-label-sm border border-outline-variant/25 focus:outline-none focus:border-primary"
+                    >
+                      {ownedAlbums.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {codeLoading ? (
+                    <div className="h-11 rounded-xl bg-surface-container animate-pulse" />
+                  ) : albumCodeInvite ? (
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 rounded-xl bg-surface-container">
+                      <span className="font-mono text-base font-bold tracking-wider text-on-surface select-all">
+                        {albumCodeInvite.code}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            copyShareText(albumCodeInvite.code, 'Joining code copied!')
+                          }
+                          className="px-3 min-h-[34px] rounded-full bg-primary text-on-primary font-label-sm font-semibold flex items-center gap-1"
+                        >
+                          <span className="material-symbols-outlined text-[15px]">
+                            content_copy
+                          </span>
+                          <span>Copy Code</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={codeCreating}
+                          onClick={handleGenerateNewFeedCode}
+                          className="px-2.5 min-h-[34px] rounded-full bg-surface-container-high text-on-surface font-label-sm font-semibold disabled:opacity-60"
+                        >
+                          {codeCreating ? '...' : 'New'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={codeCreating}
+                      onClick={handleGenerateNewFeedCode}
+                      className="w-full min-h-[38px] px-3 rounded-full bg-primary text-on-primary font-label-sm font-semibold"
+                    >
+                      Get Joining Code
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-surface-container/60">
+                  <span className="font-body-sm text-xs text-on-surface-variant">
+                    Create a shared album to get your own joining code.
+                  </span>
+                  <Link
+                    to="/shared-collection"
+                    className="px-3 py-1 rounded-full bg-primary text-on-primary font-label-sm text-xs font-semibold shrink-0"
+                  >
+                    Create Album
+                  </Link>
+                </div>
+              )}
+
+              {/* Join with a friend's code */}
+              <form
+                onSubmit={handleJoinAlbumByCode}
+                className="pt-2 border-t border-outline-variant/20 space-y-1.5"
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={joinCodeValue}
+                    onChange={(e) => setJoinCodeValue(e.target.value)}
+                    placeholder="Enter friend's joining code..."
+                    className="flex-1 min-w-0 px-3 py-1.5 rounded-full bg-surface-container-lowest text-on-surface border border-outline-variant/30 font-body-sm text-sm focus:outline-none focus:border-primary"
+                  />
+                  <button
+                    type="submit"
+                    disabled={joiningAlbum}
+                    className="px-4 py-1.5 rounded-full bg-primary text-on-primary font-label-sm font-semibold shrink-0 disabled:opacity-60"
+                  >
+                    {joiningAlbum ? 'Joining...' : 'Join'}
+                  </button>
+                </div>
+                {joinCodeError && (
+                  <p className="font-body-sm text-xs text-error px-1">{joinCodeError}</p>
+                )}
+              </form>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Top Story Circles (ONLY people followed who posted in the last 24h; hidden if none) */}
       {stories.length > 0 && (

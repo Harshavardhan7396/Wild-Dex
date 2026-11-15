@@ -323,7 +323,9 @@ export const ProfilePage: React.FC = () => {
               </span>
               <span>
                 {userProfile?.locationConsent && userProfile.homeLat != null && userProfile.homeLng != null
-                  ? `Private area (~1 km): ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
+                  ? userProfile.homeLabel
+                    ? `Private area (~1 km): ${userProfile.homeLabel} (${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)})`
+                    : `Private area (~1 km): ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
                   : 'Home location not set'}
               </span>
             </div>
@@ -342,6 +344,7 @@ export const ProfilePage: React.FC = () => {
                       locationConsent: false,
                       homeLat: null,
                       homeLng: null,
+                      homeLabel: '',
                     });
                     showToast('Saved location removed');
                   } catch (err: any) {

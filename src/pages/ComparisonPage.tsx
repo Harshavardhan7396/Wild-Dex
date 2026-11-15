@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { PUBLIC_SITE_URL } from '../services/sharedAlbumService';
 import {
   CompareFilterType,
   CompareSpeciesDetail,
@@ -246,7 +247,8 @@ export const ComparisonPage: React.FC = () => {
   };
 
   const handleShareUrl = async () => {
-    const shareUrl = window.location.href;
+    const query = searchParams.toString();
+    const shareUrl = query ? `${PUBLIC_SITE_URL}/#/compare?${query}` : `${PUBLIC_SITE_URL}/#/compare`;
     const title =
       specimenA && specimenB
         ? `Compare ${specimenA.commonName} vs ${specimenB.commonName} on WildDex`

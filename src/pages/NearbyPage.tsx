@@ -5,6 +5,7 @@ import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import { useAuth } from '../contexts/AuthContext';
+import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
 import {
   NearbyCategory,
   NearbyPlace,
@@ -100,20 +101,46 @@ function buildDirectionsUrl(
 }
 
 export const NearbyPage: React.FC = () => {
-  const { userProfile } = useAuth();
+  const { currentUser, userProfile } = useAuth();
+  const [privateData, setPrivateData] = useState<UserPrivateData | null>(null);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setPrivateData(null);
+      return;
+    }
+    let active = true;
+    fetchMyUserPrivate()
+      .then((priv) => {
+        if (active) setPrivateData(priv);
+      })
+      .catch((err) => {
+        console.warn('Could not read user_private on Nearby:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.id, userProfile?.locationConsent, userProfile?.homeLat, userProfile?.homeLng]);
 
   const savedHomeCenter = useMemo(() => {
+    const source = currentUser ? privateData ?? userProfile : null;
     if (
-      userProfile?.locationConsent &&
-      userProfile?.homeLat !== null &&
-      userProfile?.homeLat !== undefined &&
-      userProfile?.homeLng !== null &&
-      userProfile?.homeLng !== undefined
+      source?.locationConsent &&
+      source?.homeLat !== null &&
+      source?.homeLat !== undefined &&
+      source?.homeLng !== null &&
+      source?.homeLng !== undefined
     ) {
-      return { lat: userProfile.homeLat, lng: userProfile.homeLng };
+      return { lat: source.homeLat, lng: source.homeLng };
     }
     return null;
-  }, [userProfile?.locationConsent, userProfile?.homeLat, userProfile?.homeLng]);
+  }, [
+    currentUser,
+    privateData,
+    userProfile?.locationConsent,
+    userProfile?.homeLat,
+    userProfile?.homeLng,
+  ]);
 
   // Location states
   const [livePos, setLivePos] = useState<{ lat: number; lng: number } | null>(null);

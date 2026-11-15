@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth, FavoriteSpeciesItem } from '../contexts/AuthContext';
+import { fetchMyUserPrivate } from '../services/userPrivateService';
 
 interface InterestGroup {
   id: string;
@@ -204,9 +205,14 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
   const [homeLng, setHomeLng] = useState<number | null>(
     () => userProfile?.homeLng ?? null
   );
+  const [homeLabel, setHomeLabel] = useState<string>(
+    () => userProfile?.homeLabel ?? ''
+  );
   const [areaLabel, setAreaLabel] = useState<string>(() =>
     userProfile?.homeLat != null && userProfile?.homeLng != null
-      ? `Near ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
+      ? userProfile.homeLabel
+        ? `${userProfile.homeLabel} (~${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)})`
+        : `Near ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
       : ''
   );
   const [showCitySearch, setShowCitySearch] = useState(false);
@@ -225,25 +231,41 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Pre-fill when userProfile finishes loading in edit mode
+  // Load directly from signed-in user's user_private row in edit mode
   useEffect(() => {
-    if (!userProfile) return;
-    if (isEditMode) {
-      setSelectedInterests(userProfile.interests || []);
-      setFavoriteSpecies(userProfile.favoriteSpecies || []);
-      const hasCoords =
-        Boolean(userProfile.locationConsent) &&
-        userProfile.homeLat != null &&
-        userProfile.homeLng != null;
-      setLocationConsent(hasCoords);
-      setHomeLat(userProfile.homeLat ?? null);
-      setHomeLng(userProfile.homeLng ?? null);
-      setAreaLabel(
-        hasCoords && userProfile.homeLat != null && userProfile.homeLng != null
-          ? `Near ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
-          : ''
-      );
-    }
+    if (!isEditMode || !userProfile?.id) return;
+    let active = true;
+
+    fetchMyUserPrivate()
+      .then((priv) => {
+        if (!active) return;
+        const source = priv ?? userProfile;
+        setSelectedInterests(source.interests || []);
+        setFavoriteSpecies(source.favoriteSpecies || []);
+        const hasCoords =
+          Boolean(source.locationConsent) &&
+          source.homeLat != null &&
+          source.homeLng != null;
+        setLocationConsent(hasCoords);
+        setHomeLat(source.homeLat ?? null);
+        setHomeLng(source.homeLng ?? null);
+        const label = hasCoords ? source.homeLabel || '' : '';
+        setHomeLabel(label);
+        setAreaLabel(
+          hasCoords && source.homeLat != null && source.homeLng != null
+            ? label
+              ? `${label} (~${source.homeLat.toFixed(2)}, ${source.homeLng.toFixed(2)})`
+              : `Near ${source.homeLat.toFixed(2)}, ${source.homeLng.toFixed(2)}`
+            : ''
+        );
+      })
+      .catch((err) => {
+        console.warn('Could not load user_private in edit mode:', err);
+      });
+
+    return () => {
+      active = false;
+    };
   }, [isEditMode, userProfile?.id]);
 
   // Step 2: Debounced (300ms) iNaturalist taxa autocomplete
@@ -413,6 +435,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
             const roundedLng = roundCoord(position.coords.longitude);
             setHomeLat(roundedLat);
             setHomeLng(roundedLng);
+            setHomeLabel('');
             setLocationConsent(true);
             setAreaLabel(`Near ${roundedLat.toFixed(2)}, ${roundedLng.toFixed(2)}`);
             setShowCitySearch(false);
@@ -453,9 +476,10 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
     }
     const roundedLat = roundCoord(latNum);
     const roundedLng = roundCoord(lngNum);
-    const shortName = place.display_name.split(',').slice(0, 2).join(', ');
+    const shortName = place.display_name.split(',').slice(0, 2).join(', ').trim();
     setHomeLat(roundedLat);
     setHomeLng(roundedLng);
+    setHomeLabel(shortName);
     setLocationConsent(true);
     setAreaLabel(`${shortName} (~${roundedLat.toFixed(2)}, ${roundedLng.toFixed(2)})`);
     setCityResults([]);
@@ -467,6 +491,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
     setLocationConsent(false);
     setHomeLat(null);
     setHomeLng(null);
+    setHomeLabel('');
     setAreaLabel('');
     setGeoError(null);
     setCityError(null);
@@ -485,6 +510,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
       : Boolean(locationConsent && homeLat !== null && homeLng !== null);
     const finalLat = finalConsent && homeLat !== null ? roundCoord(homeLat) : null;
     const finalLng = finalConsent && homeLng !== null ? roundCoord(homeLng) : null;
+    const finalLabel = finalConsent ? homeLabel : '';
 
     try {
       await saveOnboardingPreferences({
@@ -494,9 +520,17 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
         locationConsent: finalConsent,
         homeLat: finalLat,
         homeLng: finalLng,
+        homeLabel: finalLabel,
       });
 
-      if (isEditMode) {
+      let pendingJoinCode = '';
+      try {
+        pendingJoinCode = sessionStorage.getItem('wilddex_pending_join_code') || '';
+      } catch {}
+
+      if (pendingJoinCode && !isEditMode) {
+        navigate(`/join/${encodeURIComponent(pendingJoinCode)}`, { replace: true });
+      } else if (isEditMode) {
         navigate('/profile');
       } else {
         navigate('/');

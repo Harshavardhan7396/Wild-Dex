@@ -76,6 +76,79 @@ function isRelationshipMissingError(error: any): boolean {
   );
 }
 
+type AuthorColumn = 'user_id' | 'author_id' | 'owner_id' | 'creator_id';
+const AUTHOR_COL_CANDIDATES: AuthorColumn[] = [
+  'user_id',
+  'author_id',
+  'owner_id',
+  'creator_id',
+];
+
+let cachedPostAuthorCol: AuthorColumn | null = null;
+let cachedCommentAuthorCol: AuthorColumn | null = null;
+
+function isMissingColumnError(error: any, colName?: string): boolean {
+  if (!error) return false;
+  const code = String(error.code || '');
+  const msg = String(error.message || '').toLowerCase();
+  const isColErr =
+    code === '42703' ||
+    code === 'PGRST204' ||
+    msg.includes('does not exist') ||
+    msg.includes('could not find the');
+  if (!isColErr) return false;
+  if (!colName) return true;
+  return msg.includes(colName.toLowerCase());
+}
+
+function extractMissingColumnName(error: any): string | null {
+  const msg = String(error?.message || '');
+  const pgrstMatch = msg.match(/['"]([a-zA-Z0-9_]+)['"]\s+column/i);
+  if (pgrstMatch?.[1]) return pgrstMatch[1];
+  const pgMatch = msg.match(/column\s+(?:[a-zA-Z0-9_]+\.)?["']?([a-zA-Z0-9_]+)["']?\s+does not exist/i);
+  if (pgMatch?.[1]) return pgMatch[1];
+  const relMatch = msg.match(/column\s+["']?([a-zA-Z0-9_]+)["']?\s+of relation/i);
+  if (relMatch?.[1]) return relMatch[1];
+  return null;
+}
+
+function extractAuthorId(row: any): string {
+  return (
+    row?.user_id ||
+    row?.author_id ||
+    row?.owner_id ||
+    row?.creator_id ||
+    ''
+  );
+}
+
+async function detectTableAuthorColumn(
+  table: 'community_posts' | 'post_comments',
+  forceReprobe = false
+): Promise<AuthorColumn> {
+  const current = table === 'community_posts' ? cachedPostAuthorCol : cachedCommentAuthorCol;
+  if (current && !forceReprobe) {
+    return current;
+  }
+
+  for (const col of AUTHOR_COL_CANDIDATES) {
+    const { error } = await supabase.from(table).select(col).limit(1);
+    if (!error) {
+      if (table === 'community_posts') cachedPostAuthorCol = col;
+      else cachedCommentAuthorCol = col;
+      return col;
+    }
+    if (!isMissingColumnError(error, col)) {
+      break;
+    }
+  }
+
+  const fallback: AuthorColumn = 'user_id';
+  if (table === 'community_posts') cachedPostAuthorCol = fallback;
+  else cachedCommentAuthorCol = fallback;
+  return fallback;
+}
+
 function normalizeAuthor(rawProfile: any, fallbackId: string): PublicAuthor {
   const profileObj = Array.isArray(rawProfile) ? rawProfile[0] : rawProfile;
   const username =
@@ -331,19 +404,128 @@ export async function uploadPostPhoto(userId: string, source: File | string): Pr
   }
 }
 
+type FollowTable = 'user_follows' | 'follows';
+const FOLLOW_TABLE_CANDIDATES: FollowTable[] = ['user_follows', 'follows'];
+const FOLLOWER_COL_CANDIDATES = ['follower_id', 'user_id'] as const;
+const FOLLOWING_COL_CANDIDATES = [
+  'following_id',
+  'followed_id',
+  'following_user_id',
+  'target_id',
+  'followee_id',
+] as const;
+
+interface FollowConfig {
+  table: FollowTable;
+  followerCol: string;
+  followingCol: string;
+}
+
+let cachedFollowConfig: FollowConfig | null = null;
+
+function isMissingRelationOrColumnError(error: any): boolean {
+  if (!error) return false;
+  if (isMissingColumnError(error)) return true;
+  const code = String(error.code || '');
+  const msg = String(error.message || '').toLowerCase();
+  return (
+    code === '42P01' ||
+    code === 'PGRST205' ||
+    msg.includes('does not exist') ||
+    msg.includes('could not find the table') ||
+    msg.includes('schema cache')
+  );
+}
+
+async function detectFollowConfig(forceReprobe = false): Promise<FollowConfig> {
+  if (cachedFollowConfig && !forceReprobe) {
+    return cachedFollowConfig;
+  }
+
+  for (const table of FOLLOW_TABLE_CANDIDATES) {
+    for (const followerCol of FOLLOWER_COL_CANDIDATES) {
+      for (const followingCol of FOLLOWING_COL_CANDIDATES) {
+        const { error } = await supabase
+          .from(table)
+          .select(`${followerCol}, ${followingCol}`)
+          .limit(1);
+
+        if (!error) {
+          cachedFollowConfig = { table, followerCol, followingCol };
+          return cachedFollowConfig;
+        }
+
+        const msg = String(error.message || '').toLowerCase();
+        const code = String(error.code || '');
+        if (code === '42P01' || code === 'PGRST205' || msg.includes(table)) {
+          // Table itself doesn't exist, skip remaining column checks for this table
+          break;
+        }
+        if (!isMissingColumnError(error)) {
+          // Non-schema error (e.g. RLS/network) — abort probing
+          cachedFollowConfig = {
+            table: 'user_follows',
+            followerCol: 'follower_id',
+            followingCol: 'following_id',
+          };
+          return cachedFollowConfig;
+        }
+      }
+    }
+  }
+
+  cachedFollowConfig = {
+    table: 'user_follows',
+    followerCol: 'follower_id',
+    followingCol: 'following_id',
+  };
+  return cachedFollowConfig;
+}
+
 export async function fetchFollowingIds(userId: string): Promise<string[]> {
   ensureSupabaseConfigured();
   try {
-    const { data, error } = await supabase
-      .from('user_follows')
-      .select('following_id')
-      .eq('follower_id', userId);
+    const activeConfig: FollowConfig = cachedFollowConfig || {
+      table: 'user_follows',
+      followerCol: 'follower_id',
+      followingCol: 'following_id',
+    };
+
+    let { data, error } = await supabase
+      .from(activeConfig.table)
+      .select(activeConfig.followingCol)
+      .eq(activeConfig.followerCol, userId);
+
+    let usedConfig = activeConfig;
+
+    if (error && isMissingRelationOrColumnError(error)) {
+      const detected = await detectFollowConfig(true);
+      if (
+        detected.table !== activeConfig.table ||
+        detected.followerCol !== activeConfig.followerCol ||
+        detected.followingCol !== activeConfig.followingCol
+      ) {
+        const retryRes = await supabase
+          .from(detected.table)
+          .select(detected.followingCol)
+          .eq(detected.followerCol, userId);
+        data = retryRes.data;
+        error = retryRes.error;
+        usedConfig = detected;
+      }
+    }
 
     if (error) {
+      if (isMissingRelationOrColumnError(error)) {
+        console.warn('Follow table/column unavailable, defaulting to empty following list:', error.message);
+        return [];
+      }
       throw new Error(error.message || 'Could not load followed users.');
     }
 
-    return (data || []).map((row: any) => row.following_id).filter(Boolean);
+    return (data || [])
+      .map((row: any) => row?.[usedConfig.followingCol] || row?.following_id || row?.followed_id)
+      .filter(Boolean);
   } catch (err: any) {
     console.error('Error fetching following ids:', err);
     throw new Error(err?.message || 'Could not load followed users.');
@@ -359,24 +541,47 @@ export async function toggleFollowUser(params: {
   const { followerId, followingId, currentlyFollowing } = params;
   if (followerId === followingId) return false;
 
-  try {
+  const runToggle = async (cfg: FollowConfig) => {
     if (currentlyFollowing) {
-      const { error } = await supabase
-        .from('user_follows')
+      return supabase
+        .from(cfg.table)
         .delete()
-        .eq('follower_id', followerId)
-        .eq('following_id', followingId);
-
-      if (error) throw new Error(error.message || 'Could not unfollow user.');
-      return false;
-    } else {
-      const { error } = await supabase
-        .from('user_follows')
-        .insert([{ follower_id: followerId, following_id: followingId }]);
-
-      if (error) throw new Error(error.message || 'Could not follow user.');
-      return true;
+        .eq(cfg.followerCol, followerId)
+        .eq(cfg.followingCol, followingId);
     }
+    return supabase
+      .from(cfg.table)
+      .insert([{ [cfg.followerCol]: followerId, [cfg.followingCol]: followingId }]);
+  };
+
+  try {
+    const activeConfig: FollowConfig = cachedFollowConfig || {
+      table: 'user_follows',
+      followerCol: 'follower_id',
+      followingCol: 'following_id',
+    };
+
+    let { error } = await runToggle(activeConfig);
+
+    if (error && isMissingRelationOrColumnError(error)) {
+      const detected = await detectFollowConfig(true);
+      if (
+        detected.table !== activeConfig.table ||
+        detected.followerCol !== activeConfig.followerCol ||
+        detected.followingCol !== activeConfig.followingCol
+      ) {
+        const retryRes = await runToggle(detected);
+        error = retryRes.error;
+      }
+    }
+
+    if (error) {
+      throw new Error(
+        error.message || (currentlyFollowing ? 'Could not unfollow user.' : 'Could not follow user.')
+      );
+    }
+
+    return !currentlyFollowing;
   } catch (err: any) {
     console.error('Error toggling follow:', err);
     throw new Error(err?.message || 'Could not update follow status.');
@@ -390,8 +595,9 @@ async function hydratePosts(rawRows: any[], currentUserId: string): Promise<Comm
   const missingProfileUserIds: string[] = [];
 
   for (const row of rawRows) {
-    if (!row.public_profiles && row.user_id) {
-      missingProfileUserIds.push(row.user_id);
+    const postAuthorId = extractAuthorId(row);
+    if (!row.public_profiles && postAuthorId) {
+      missingProfileUserIds.push(postAuthorId);
     }
   }
 
@@ -425,18 +631,19 @@ async function hydratePosts(rawRows: any[], currentUserId: string): Promise<Comm
   }
 
   return rawRows.map((row) => {
-    const joinedProfile = row.public_profiles || fallbackProfiles.get(row.user_id);
-    const author = normalizeAuthor(joinedProfile, row.user_id);
-    const photoPath = row.photo_path || '';
+    const postAuthorId = extractAuthorId(row);
+    const joinedProfile = row.public_profiles || fallbackProfiles.get(postAuthorId);
+    const author = normalizeAuthor(joinedProfile, postAuthorId);
+    const photoPath = row.photo_path || row.photo_url || '';
 
     return {
       id: row.id,
-      userId: row.user_id,
+      userId: postAuthorId,
       collectionItemId: row.collection_item_id || null,
-      speciesName: row.species_name || 'Nature Discovery',
+      speciesName: row.species_name || row.species || 'Nature Discovery',
       scientificName: row.scientific_name || '',
       caption: row.caption || '',
-      placeLabel: row.place_label || '',
+      placeLabel: row.place_label || row.location_label || row.location || '',
       photoPath,
       photoUrl: resolvePostPhotoUrl(photoPath),
       visibility: row.visibility === 'followers' ? 'followers' : 'public',
@@ -454,11 +661,13 @@ function applyCommunityFilters(
   tab: CommunityTab,
   userId: string,
   followingIds: string[],
-  areaTokens: string[]
+  areaTokens: string[],
+  authorCol: AuthorColumn,
+  options?: { skipVisibility?: boolean; skipPlaceLabel?: boolean }
 ) {
   if (tab === 'circle') {
     const circleIds = Array.from(new Set([userId, ...followingIds]));
-    return query.in('user_id', circleIds);
+    return query.in(authorCol, circleIds);
   }
 
   if (tab === 'nearby') {
@@ -466,8 +675,8 @@ function applyCommunityFilters(
       .map((t) => t.replace(/[%_,()"]/g, '').trim())
       .filter((t) => t.length >= 2);
 
-    const publicQuery = query.eq('visibility', 'public');
-    if (cleanTokens.length === 0) {
+    const publicQuery = options?.skipVisibility ? query : query.eq('visibility', 'public');
+    if (cleanTokens.length === 0 || options?.skipPlaceLabel) {
       return publicQuery;
     }
     const orExpr = cleanTokens.map((t) => `place_label.ilike.%${t}%`).join(',');
@@ -475,7 +684,7 @@ function applyCommunityFilters(
   }
 
   // 'everyone'
-  return query.eq('visibility', 'public');
+  return options?.skipVisibility ? query : query.eq('visibility', 'public');
 }
 
 export async function fetchCommunityPosts(params: {
@@ -503,14 +712,17 @@ export async function fetchCommunityPosts(params: {
   const from = page * pageSize;
   const to = from + pageSize; // fetch 1 extra item to check hasMore
 
-  try {
+  const runPostsQuery = async (
+    authorCol: AuthorColumn,
+    options?: { skipVisibility?: boolean; skipPlaceLabel?: boolean }
+  ) => {
     let query = supabase
       .from('community_posts')
       .select('*, public_profiles(id, username, display_name, avatar_url)')
       .order('created_at', { ascending: false })
       .range(from, to);
 
-    query = applyCommunityFilters(query, tab, userId, followingIds, areaTokens);
+    query = applyCommunityFilters(query, tab, userId, followingIds, areaTokens, authorCol, options);
 
     let { data, error } = await query;
 
@@ -526,11 +738,40 @@ export async function fetchCommunityPosts(params: {
         tab,
         userId,
         followingIds,
-        areaTokens
+        areaTokens,
+        authorCol,
+        options
       );
       const fallbackRes = await fallbackQuery;
       data = fallbackRes.data;
       error = fallbackRes.error;
+    }
+
+    return { data, error };
+  };
+
+  try {
+    let activeCol: AuthorColumn = cachedPostAuthorCol || 'user_id';
+    const filterOpts = { skipVisibility: false, skipPlaceLabel: false };
+    let { data, error } = await runPostsQuery(activeCol, filterOpts);
+
+    for (let attempt = 0; attempt < 3 && error && isMissingColumnError(error); attempt++) {
+      const missingCol = extractMissingColumnName(error);
+      if (missingCol === 'visibility' && !filterOpts.skipVisibility) {
+        filterOpts.skipVisibility = true;
+      } else if (missingCol === 'place_label' && !filterOpts.skipPlaceLabel) {
+        filterOpts.skipPlaceLabel = true;
+      } else {
+        const detectedCol = await detectTableAuthorColumn('community_posts', true);
+        if (detectedCol !== activeCol) {
+          activeCol = detectedCol;
+        } else {
+          break;
+        }
+      }
+      const retryRes = await runPostsQuery(activeCol, filterOpts);
+      data = retryRes.data;
+      error = retryRes.error;
     }
 
     if (error) {
@@ -555,13 +796,11 @@ export async function fetchFollowedStories24h(followingIds: string[]): Promise<S
     return [];
   }
 
-  try {
-    const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-
+  const runStoriesQuery = async (authorCol: AuthorColumn, sinceIso: string) => {
     let { data, error } = await supabase
       .from('community_posts')
       .select('*, public_profiles(id, username, display_name, avatar_url)')
-      .in('user_id', followingIds)
+      .in(authorCol, followingIds)
       .gte('created_at', sinceIso)
       .order('created_at', { ascending: false })
       .limit(50);
@@ -570,12 +809,29 @@ export async function fetchFollowedStories24h(followingIds: string[]): Promise<S
       const fallbackRes = await supabase
         .from('community_posts')
         .select('*')
-        .in('user_id', followingIds)
+        .in(authorCol, followingIds)
         .gte('created_at', sinceIso)
         .order('created_at', { ascending: false })
         .limit(50);
       data = fallbackRes.data;
       error = fallbackRes.error;
+    }
+
+    return { data, error };
+  };
+
+  try {
+    const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const initialCol = cachedPostAuthorCol || 'user_id';
+    let { data, error } = await runStoriesQuery(initialCol, sinceIso);
+
+    if (error && isMissingColumnError(error)) {
+      const detectedCol = await detectTableAuthorColumn('community_posts', true);
+      if (detectedCol !== initialCol) {
+        const retryRes = await runStoriesQuery(detectedCol, sinceIso);
+        data = retryRes.data;
+        error = retryRes.error;
+      }
     }
 
     if (error) {
@@ -586,8 +842,8 @@ export async function fetchFollowedStories24h(followingIds: string[]): Promise<S
     if (rows.length === 0) return [];
 
     const missingIds = rows
-      .filter((r: any) => !r.public_profiles && r.user_id)
-      .map((r: any) => r.user_id);
+      .filter((r: any) => !r.public_profiles && extractAuthorId(r))
+      .map((r: any) => extractAuthorId(r));
     const fallbackProfiles =
       missingIds.length > 0
         ? await fetchPublicProfilesMap(missingIds)
@@ -597,24 +853,25 @@ export async function fetchFollowedStories24h(followingIds: string[]): Promise<S
     const stories: StoryCircle[] = [];
 
     for (const row of rows) {
-      if (!row.user_id || seenUsers.has(row.user_id)) continue;
-      seenUsers.add(row.user_id);
+      const postAuthorId = extractAuthorId(row);
+      if (!postAuthorId || seenUsers.has(postAuthorId)) continue;
+      seenUsers.add(postAuthorId);
 
       const author = normalizeAuthor(
-        row.public_profiles || fallbackProfiles.get(row.user_id),
-        row.user_id
+        row.public_profiles || fallbackProfiles.get(postAuthorId),
+        postAuthorId
       );
 
       stories.push({
-        userId: row.user_id,
+        userId: postAuthorId,
         username: author.username,
         displayName: author.displayName,
         avatarUrl: author.avatarUrl,
         latestPostId: row.id,
-        latestPhotoUrl: resolvePostPhotoUrl(row.photo_path || ''),
-        latestSpeciesName: row.species_name || 'Discovery',
+        latestPhotoUrl: resolvePostPhotoUrl(row.photo_path || row.photo_url || ''),
+        latestSpeciesName: row.species_name || row.species || 'Discovery',
         latestCaption: row.caption || '',
-        latestPlaceLabel: row.place_label || '',
+        latestPlaceLabel: row.place_label || row.location_label || row.location || '',
         latestCreatedAt: row.created_at,
       });
     }
@@ -663,10 +920,11 @@ export async function createCommunityPost(params: {
   }
 
   try {
-    const { photoPath } = await uploadPostPhoto(userId, photoSource);
+    const { photoPath, photoUrl } = await uploadPostPhoto(userId, photoSource);
 
-    const insertRow = {
-      user_id: userId,
+    let activeAuthorCol: AuthorColumn = cachedPostAuthorCol || 'user_id';
+    const insertPayload: Record<string, any> = {
+      [activeAuthorCol]: userId,
       collection_item_id: collectionItemId,
       species_name: cleanSpecies,
       scientific_name: scientificName.trim(),
@@ -676,11 +934,79 @@ export async function createCommunityPost(params: {
       visibility,
     };
 
-    const { data, error } = await supabase
-      .from('community_posts')
-      .insert([insertRow])
-      .select('*')
-      .single();
+    const strippedCols = new Set<string>();
+    let data: any = null;
+    let error: any = null;
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const res = await supabase
+        .from('community_posts')
+        .insert([insertPayload])
+        .select('*')
+        .single();
+
+      data = res.data;
+      error = res.error;
+
+      if (!error) break;
+
+      if (isMissingColumnError(error)) {
+        const missingCol = extractMissingColumnName(error);
+
+        if (missingCol === activeAuthorCol) {
+          delete insertPayload[activeAuthorCol];
+          strippedCols.add(activeAuthorCol);
+          const detectedCol = await detectTableAuthorColumn('community_posts', true);
+          activeAuthorCol = detectedCol;
+          if (!strippedCols.has(detectedCol)) {
+            insertPayload[detectedCol] = userId;
+            continue;
+          }
+        }
+
+        if (missingCol === 'photo_path') {
+          delete insertPayload.photo_path;
+          strippedCols.add('photo_path');
+          if (!strippedCols.has('photo_url')) {
+            insertPayload.photo_url = photoUrl || photoPath;
+            continue;
+          }
+        }
+
+        if (missingCol === 'place_label') {
+          delete insertPayload.place_label;
+          strippedCols.add('place_label');
+          if (!strippedCols.has('location')) {
+            insertPayload.location = cleanPlace;
+            continue;
+          }
+        }
+
+        if (missingCol && missingCol in insertPayload) {
+          delete insertPayload[missingCol];
+          strippedCols.add(missingCol);
+          continue;
+        }
+      }
+
+      // Handle pre-existing tables with alternate NOT NULL columns (e.g. author_id or photo_url)
+      if (String(error.code || '') === '23502') {
+        const msgLower = String(error.message || '').toLowerCase();
+        const extraAuthorCol = AUTHOR_COL_CANDIDATES.find(
+          (c) => msgLower.includes(c) && !(c in insertPayload)
+        );
+        if (extraAuthorCol) {
+          insertPayload[extraAuthorCol] = userId;
+          continue;
+        }
+        if (msgLower.includes('photo_url') && !('photo_url' in insertPayload)) {
+          insertPayload.photo_url = photoUrl || photoPath;
+          continue;
+        }
+      }
+
+      break;
+    }
 
     if (error || !data) {
       throw new Error(error?.message || 'Failed to publish post.');
@@ -703,11 +1029,24 @@ export async function deleteCommunityPost(params: {
   const { userId, postId, photoPath } = params;
 
   try {
-    const { error } = await supabase
+    const initialCol = cachedPostAuthorCol || 'user_id';
+    let { error } = await supabase
       .from('community_posts')
       .delete()
       .eq('id', postId)
-      .eq('user_id', userId);
+      .eq(initialCol, userId);
+
+    if (error && isMissingColumnError(error)) {
+      const detectedCol = await detectTableAuthorColumn('community_posts', true);
+      if (detectedCol !== initialCol) {
+        const retryRes = await supabase
+          .from('community_posts')
+          .delete()
+          .eq('id', postId)
+          .eq(detectedCol, userId);
+        error = retryRes.error;
+      }
+    }
 
     if (error) {
       throw new Error(error.message || 'Could not delete post.');
@@ -788,24 +1127,27 @@ export async function fetchPostComments(postId: string): Promise<PostComment[]> 
 
     const rows = data || [];
     const missingUserIds = rows
-      .filter((r: any) => !r.public_profiles && r.user_id)
-      .map((r: any) => r.user_id);
+      .filter((r: any) => !r.public_profiles && extractAuthorId(r))
+      .map((r: any) => extractAuthorId(r));
     const fallbackProfiles =
       missingUserIds.length > 0
         ? await fetchPublicProfilesMap(missingUserIds)
         : new Map<string, PublicAuthor>();
 
-    return rows.map((row: any) => ({
-      id: row.id,
-      postId: row.post_id,
-      userId: row.user_id,
-      body: row.body,
-      createdAt: row.created_at,
-      author: normalizeAuthor(
-        row.public_profiles || fallbackProfiles.get(row.user_id),
-        row.user_id
-      ),
-    }));
+    return rows.map((row: any) => {
+      const commentAuthorId = extractAuthorId(row);
+      return {
+        id: row.id,
+        postId: row.post_id,
+        userId: commentAuthorId,
+        body: row.body,
+        createdAt: row.created_at,
+        author: normalizeAuthor(
+          row.public_profiles || fallbackProfiles.get(commentAuthorId),
+          commentAuthorId
+        ),
+      };
+    });
   } catch (err: any) {
     console.error('Error fetching comments:', err);
     throw new Error(err?.message || 'Could not load comments.');
@@ -829,21 +1171,36 @@ export async function addPostComment(params: {
   }
 
   try {
-    const { data, error } = await supabase
+    const initialCol = cachedCommentAuthorCol || 'user_id';
+    let { data, error } = await supabase
       .from('post_comments')
-      .insert([{ post_id: postId, user_id: userId, body: cleanBody }])
+      .insert([{ post_id: postId, [initialCol]: userId, body: cleanBody }])
       .select('*')
       .single();
+
+    if (error && isMissingColumnError(error)) {
+      const detectedCol = await detectTableAuthorColumn('post_comments', true);
+      if (detectedCol !== initialCol) {
+        const retryRes = await supabase
+          .from('post_comments')
+          .insert([{ post_id: postId, [detectedCol]: userId, body: cleanBody }])
+          .select('*')
+          .single();
+        data = retryRes.data;
+        error = retryRes.error;
+      }
+    }
 
     if (error || !data) {
       throw new Error(error?.message || 'Could not post comment.');
     }
 
     const profilesMap = await fetchPublicProfilesMap([userId]);
+    const commentAuthorId = extractAuthorId(data) || userId;
     const author =
-      profilesMap.get(userId) ||
+      profilesMap.get(commentAuthorId) ||
       fallbackAuthor || {
-        id: userId,
+        id: commentAuthorId,
         username: 'Explorer',
         displayName: 'Explorer',
         avatarUrl: '',
@@ -852,7 +1209,7 @@ export async function addPostComment(params: {
     return {
       id: data.id,
       postId: data.post_id,
-      userId: data.user_id,
+      userId: commentAuthorId,
       body: data.body,
       createdAt: data.created_at,
       author,
@@ -870,11 +1227,24 @@ export async function deletePostComment(params: {
   ensureSupabaseConfigured();
   const { commentId, userId } = params;
   try {
-    const { error } = await supabase
+    const initialCol = cachedCommentAuthorCol || 'user_id';
+    let { error } = await supabase
       .from('post_comments')
       .delete()
       .eq('id', commentId)
-      .eq('user_id', userId);
+      .eq(initialCol, userId);
+
+    if (error && isMissingColumnError(error)) {
+      const detectedCol = await detectTableAuthorColumn('post_comments', true);
+      if (detectedCol !== initialCol) {
+        const retryRes = await supabase
+          .from('post_comments')
+          .delete()
+          .eq('id', commentId)
+          .eq(detectedCol, userId);
+        error = retryRes.error;
+      }
+    }
 
     if (error) {
       throw new Error(error.message || 'Could not delete comment.');

@@ -24,8 +24,11 @@ export const JoinAlbumPage: React.FC = () => {
       } catch {}
       navigate(`/shared-collection/${albumId}`, { replace: true });
     } catch (err: any) {
+      try {
+        sessionStorage.removeItem('wilddex_pending_join_code');
+      } catch {}
       setStatus('error');
-      setErrorMessage(err?.message || 'Invite is invalid or expired');
+      setErrorMessage(err?.message || 'This invite is not valid or has expired');
     }
   }, [currentUser, code, navigate]);
 
@@ -80,14 +83,14 @@ export const JoinAlbumPage: React.FC = () => {
             Sign in to join this album
           </h1>
           <p className="font-body-sm text-body-sm text-on-surface-variant">
-            Sign in or create an account first. We will bring you right back to this invite.
+            Sign up or log in first. We will return you to this invite and accept it automatically.
           </p>
           <button
             type="button"
             onClick={() => setAuthModalOpen(true)}
             className="mt-1 px-6 py-2.5 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm"
           >
-            Sign In to Accept Invite
+            Sign Up or Log In
           </button>
         </div>
       </div>
@@ -101,27 +104,17 @@ export const JoinAlbumPage: React.FC = () => {
           <span className="material-symbols-outlined text-[24px]">link_off</span>
         </div>
         <h1 className="font-headline-sm text-headline-sm text-on-surface font-bold">
-          {errorMessage || 'Invite is invalid or expired'}
+          {errorMessage || 'This invite is not valid or has expired'}
         </h1>
         <p className="font-body-sm text-body-sm text-on-surface-variant">
           Ask the album owner to send you a fresh invite link.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
-          <button
-            type="button"
-            onClick={() => {
-              attemptedKeyRef.current = null;
-              attemptJoin();
-            }}
-            className="px-4 py-2 rounded-full bg-surface-container text-on-surface font-label-md font-semibold"
-          >
-            Retry
-          </button>
           <Link
-            to="/shared-collection"
+            to="/"
             className="px-5 py-2 rounded-full bg-primary text-on-primary font-label-md font-semibold shadow-sm"
           >
-            Go to Shared Collection
+            Go Home
           </Link>
         </div>
       </div>

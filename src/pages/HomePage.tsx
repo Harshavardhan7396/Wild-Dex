@@ -13,6 +13,7 @@ import {
   getSupabaseUserCollection,
 } from '../services/supabaseCollectionService';
 import { ForYouSpeciesCard } from '../components/home/ForYouSpeciesCard';
+import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -26,6 +27,7 @@ export const HomePage: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [privateData, setPrivateData] = useState<UserPrivateData | null>(null);
 
   // "For You" state
   const [forYouItems, setForYouItems] = useState<ForYouSpeciesItem[]>([]);
@@ -50,18 +52,45 @@ export const HomePage: React.FC = () => {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const interests = userProfile?.interests ?? [];
-  const favorites = userProfile?.favoriteSpecies ?? [];
+  // Load current signed-in user's preferences directly from user_private
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setPrivateData(null);
+      return;
+    }
+    let active = true;
+    fetchMyUserPrivate()
+      .then((priv) => {
+        if (active) setPrivateData(priv);
+      })
+      .catch((err) => {
+        console.warn('Could not read user_private on Home:', err);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    currentUser?.id,
+    userProfile?.interests,
+    userProfile?.favoriteSpecies,
+    userProfile?.locationConsent,
+    userProfile?.homeLat,
+    userProfile?.homeLng,
+  ]);
+
+  const effectivePrivate = currentUser ? privateData ?? userProfile : null;
+  const interests = effectivePrivate?.interests ?? [];
+  const favorites = effectivePrivate?.favoriteSpecies ?? [];
   const notInterestedIds = userProfile?.notInterestedIds ?? [];
   const hasLocation = Boolean(
-    userProfile?.locationConsent &&
-      userProfile?.homeLat !== null &&
-      userProfile?.homeLat !== undefined &&
-      userProfile?.homeLng !== null &&
-      userProfile?.homeLng !== undefined
+    effectivePrivate?.locationConsent &&
+      effectivePrivate?.homeLat !== null &&
+      effectivePrivate?.homeLat !== undefined &&
+      effectivePrivate?.homeLng !== null &&
+      effectivePrivate?.homeLng !== undefined
   );
-  const homeLat = hasLocation ? userProfile?.homeLat ?? null : null;
-  const homeLng = hasLocation ? userProfile?.homeLng ?? null : null;
+  const homeLat = hasLocation ? effectivePrivate?.homeLat ?? null : null;
+  const homeLng = hasLocation ? effectivePrivate?.homeLng ?? null : null;
 
   const interestsKey = interests.join('|');
   const favoritesKey = favorites
