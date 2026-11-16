@@ -977,5 +977,146 @@ $$;
 REVOKE ALL ON FUNCTION public.accept_invite(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.accept_invite(TEXT) TO authenticated, service_role;
 
--- Refresh PostgREST schema cache so newly added columns are immediately visible
+-- ==============================================================================
+-- 12. PUBLIC PROFILES & PEOPLE SEARCH (get_profile, search_people, public RLS)
+-- ==============================================================================
+
+-- Allow authenticated users to view collection_items of users whose profile is public
+DROP POLICY IF EXISTS "Public profile collection items are viewable by authenticated users" ON public.collection_items;
+CREATE POLICY "Public profile collection items are viewable by authenticated users"
+  ON public.collection_items FOR SELECT
+  TO authenticated
+  USING (
+    auth.uid() = owner_id
+    OR EXISTS (
+      SELECT 1 FROM public.profiles p
+      WHERE p.id = collection_items.owner_id
+        AND p.is_public = true
+    )
+  );
+
+-- Allow authenticated users to sign/view scans belonging to public profiles
+DROP POLICY IF EXISTS "Public profile scans are viewable by authenticated users" ON storage.objects;
+CREATE POLICY "Public profile scans are viewable by authenticated users"
+  ON storage.objects FOR SELECT
+  TO authenticated
+  USING (
+    bucket_id = 'scans'
+    AND (
+      (storage.foldername(name))[1] = auth.uid()::text
+      OR EXISTS (
+        SELECT 1 FROM public.profiles p
+        WHERE p.id::text = (storage.foldername(name))[1]
+          AND p.is_public = true
+      )
+    )
+  );
+
+-- RPC: get_profile(p_username TEXT)
+CREATE OR REPLACE FUNCTION public.get_profile(p_username TEXT)
+RETURNS TABLE (
+  id UUID,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  bio TEXT,
+  is_public BOOLEAN,
+  species_found BIGINT,
+  scans_count BIGINT,
+  followers_count BIGINT,
+  following_count BIGINT
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    p.id,
+    COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), 'Explorer') AS username,
+    COALESCE(NULLIF(p.display_name, ''), NULLIF(p.username, ''), 'Explorer') AS display_name,
+    COALESCE(p.avatar_url, '') AS avatar_url,
+    CASE
+      WHEN COALESCE(p.is_public, true) = true OR auth.uid() = p.id THEN COALESCE(p.bio, '')
+      ELSE ''
+    END AS bio,
+    COALESCE(p.is_public, true) AS is_public,
+    CASE
+      WHEN COALESCE(p.is_public, true) = true OR auth.uid() = p.id THEN (
+        SELECT COUNT(DISTINCT LOWER(ci.species_name))::BIGINT
+        FROM public.collection_items ci
+        WHERE ci.owner_id = p.id
+      )
+      ELSE 0::BIGINT
+    END AS species_found,
+    CASE
+      WHEN COALESCE(p.is_public, true) = true OR auth.uid() = p.id THEN (
+        SELECT COUNT(*)::BIGINT
+        FROM public.collection_items ci
+        WHERE ci.owner_id = p.id
+      )
+      ELSE 0::BIGINT
+    END AS scans_count,
+    CASE
+      WHEN COALESCE(p.is_public, true) = true OR auth.uid() = p.id THEN (
+        SELECT COUNT(*)::BIGINT
+        FROM public.user_follows uf
+        WHERE uf.following_id = p.id
+      )
+      ELSE 0::BIGINT
+    END AS followers_count,
+    CASE
+      WHEN COALESCE(p.is_public, true) = true OR auth.uid() = p.id THEN (
+        SELECT COUNT(*)::BIGINT
+        FROM public.user_follows uf
+        WHERE uf.follower_id = p.id
+      )
+      ELSE 0::BIGINT
+    END AS following_count
+  FROM public.profiles p
+  WHERE LOWER(TRIM(COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), ''))) = LOWER(TRIM(COALESCE(p_username, '')))
+  LIMIT 1;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_profile(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_profile(TEXT) TO anon, authenticated, service_role;
+
+-- RPC: search_people(p_q TEXT)
+CREATE OR REPLACE FUNCTION public.search_people(p_q TEXT)
+RETURNS TABLE (
+  id UUID,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  is_public BOOLEAN
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    p.id,
+    COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), 'Explorer') AS username,
+    COALESCE(NULLIF(p.display_name, ''), NULLIF(p.username, ''), 'Explorer') AS display_name,
+    COALESCE(p.avatar_url, '') AS avatar_url,
+    COALESCE(p.is_public, true) AS is_public
+  FROM public.profiles p
+  WHERE LENGTH(TRIM(COALESCE(p_q, ''))) > 0
+    AND (
+      COALESCE(p.username, '') ILIKE '%' || TRIM(p_q) || '%'
+      OR COALESCE(p.display_name, '') ILIKE '%' || TRIM(p_q) || '%'
+    )
+  ORDER BY
+    CASE
+      WHEN LOWER(COALESCE(p.username, '')) = LOWER(TRIM(p_q)) THEN 0
+      WHEN LOWER(COALESCE(p.username, '')) LIKE LOWER(TRIM(p_q)) || '%' THEN 1
+      ELSE 2
+    END,
+    LOWER(COALESCE(p.username, p.display_name, 'explorer')) ASC
+  LIMIT 20;
+$$;
+
+REVOKE ALL ON FUNCTION public.search_people(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.search_people(TEXT) TO anon, authenticated, service_role;
+
+-- Refresh PostgREST schema cache so newly added columns and functions are immediately visible
 NOTIFY pgrst, 'reload schema';

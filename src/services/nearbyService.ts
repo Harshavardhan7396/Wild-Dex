@@ -1,3 +1,5 @@
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+
 export type NearbyCategory = 'reserve' | 'zoo' | 'shelter' | 'vet';
 
 export interface NearbyPlace {
@@ -24,15 +26,44 @@ interface CacheEntry<T> {
   data: T;
 }
 
-const OVERPASS_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const overpassCache = new Map<string, CacheEntry<NearbyPlace[]>>();
-const inFlightRequests = new Map<string, Promise<NearbyPlace[]>>();
+export const DEFAULT_NEARBY_RADIUS_KM = 10;
+export const MAX_NEARBY_RADIUS_KM = 25;
+export const OVERPASS_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+export const OVERPASS_SERVER_TIMEOUT_MS = 12 * 1000; // 12 seconds per mirror
+export const OVERPASS_TOTAL_TIMEOUT_MS = 25 * 1000; // 25 seconds total deadline
+export const OVERPASS_TIMEOUT_MESSAGE =
+  'This area is taking too long. Try a smaller radius or another filter.';
 
-const OVERPASS_ENDPOINTS = [
+const CACHE_STORAGE_PREFIX = 'wilddex_nearby:v1:';
+const ALL_CATEGORY_IDS: NearbyCategory[] = ['reserve', 'zoo', 'shelter', 'vet'];
+
+const overpassCache = new Map<string, CacheEntry<NearbyPlace[]>>();
+
+export const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
+  'https://overpass.private.coffee/api/interpreter',
+] as const;
+
+let lastNominatimRequestAt = 0;
+
+export function clampNearbyRadiusKm(radiusKm: number): number {
+  if (!Number.isFinite(radiusKm) || radiusKm <= 0) {
+    return DEFAULT_NEARBY_RADIUS_KM;
+  }
+  return Math.min(MAX_NEARBY_RADIUS_KM, Math.max(1, radiusKm));
+}
+
+export function normalizeNearbyCategories(
+  categories?: NearbyCategory[] | Set<NearbyCategory>
+): NearbyCategory[] {
+  if (!categories) return [...ALL_CATEGORY_IDS];
+  const arr = Array.isArray(categories) ? categories : Array.from(categories);
+  const valid = Array.from(
+    new Set(arr.filter((c): c is NearbyCategory => ALL_CATEGORY_IDS.includes(c)))
+  ).sort();
+  return valid.length > 0 ? valid : [...ALL_CATEGORY_IDS];
+}
 
 export function haversineKm(
   lat1: number,
@@ -109,60 +140,199 @@ function classifyOsmTags(tags: Record<string, string>): {
   return null;
 }
 
-function buildBoundingBox(lat: number, lng: number, radiusKm: number): string {
-  const latDelta = radiusKm / 111.32;
-  const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
-  const lngDelta = radiusKm / (111.32 * cosLat);
+function buildCacheKey(params: {
+  lat: number;
+  lng: number;
+  radiusKm: number;
+  categories?: NearbyCategory[] | Set<NearbyCategory>;
+}): string {
+  const clampedRadius = clampNearbyRadiusKm(params.radiusKm);
+  const cats = normalizeNearbyCategories(params.categories);
+  return `${CACHE_STORAGE_PREFIX}${params.lat.toFixed(2)},${params.lng.toFixed(
+    2
+  )}:${clampedRadius}:${cats.join(',')}`;
+}
 
-  const south = Math.max(-85, lat - latDelta).toFixed(4);
-  const north = Math.min(85, lat + latDelta).toFixed(4);
-  const west = Math.max(-180, lng - lngDelta).toFixed(4);
-  const east = Math.min(180, lng + lngDelta).toFixed(4);
-  return `${south},${west},${north},${east}`;
+function hydrateCachedList(
+  list: NearbyPlace[],
+  lat: number,
+  lng: number
+): NearbyPlace[] {
+  return list
+    .map((p) => ({
+      ...p,
+      distanceKm: haversineKm(lat, lng, p.lat, p.lng),
+    }))
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+}
+
+/**
+ * Read 30-minute memory or localStorage cache for a rounded location, radius, and filters.
+ */
+export function getCachedNearbyPlaces(params: {
+  lat: number;
+  lng: number;
+  radiusKm: number;
+  categories?: NearbyCategory[] | Set<NearbyCategory>;
+}): NearbyPlace[] | null {
+  const key = buildCacheKey(params);
+  const now = Date.now();
+
+  const memEntry = overpassCache.get(key);
+  if (memEntry) {
+    if (now - memEntry.timestamp < OVERPASS_CACHE_TTL_MS) {
+      return hydrateCachedList(memEntry.data, params.lat, params.lng);
+    }
+    overpassCache.delete(key);
+  }
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw) as CacheEntry<NearbyPlace[]>;
+        if (
+          parsed &&
+          typeof parsed.timestamp === 'number' &&
+          Array.isArray(parsed.data) &&
+          now - parsed.timestamp < OVERPASS_CACHE_TTL_MS
+        ) {
+          overpassCache.set(key, parsed);
+          return hydrateCachedList(parsed.data, params.lat, params.lng);
+        }
+        window.localStorage.removeItem(key);
+      }
+    } catch {
+      // Ignore storage read/parse errors
+    }
+  }
+
+  return null;
+}
+
+function setCachedNearbyPlaces(key: string, data: NearbyPlace[]): void {
+  const entry: CacheEntry<NearbyPlace[]> = {
+    timestamp: Date.now(),
+    data,
+  };
+  overpassCache.set(key, entry);
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(entry));
+    } catch {
+      // Evict older nearby cache entries if quota is full and retry once
+      try {
+        const keysToDelete: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i += 1) {
+          const k = window.localStorage.key(i);
+          if (k && k.startsWith(CACHE_STORAGE_PREFIX)) {
+            keysToDelete.push(k);
+          }
+        }
+        for (const k of keysToDelete.slice(0, Math.ceil(keysToDelete.length / 2))) {
+          window.localStorage.removeItem(k);
+        }
+        window.localStorage.setItem(key, JSON.stringify(entry));
+      } catch {
+        // Ignore storage write failure
+      }
+    }
+  }
+}
+
+function buildOverpassQuery(
+  lat: number,
+  lng: number,
+  radiusKm: number,
+  categories: NearbyCategory[]
+): string {
+  const clampedRadius = clampNearbyRadiusKm(radiusKm);
+  const radiusMeters = Math.round(clampedRadius * 1000);
+  const latStr = lat.toFixed(5);
+  const lngStr = lng.toFixed(5);
+  const around = `around:${radiusMeters},${latStr},${lngStr}`;
+
+  const statements: string[] = [];
+  if (categories.includes('reserve')) {
+    statements.push(`  nwr(${around})["leisure"="nature_reserve"];`);
+    statements.push(`  nwr(${around})["boundary"="protected_area"];`);
+    statements.push(`  nwr(${around})["boundary"="national_park"];`);
+  }
+  if (categories.includes('zoo')) {
+    statements.push(`  nwr(${around})["tourism"="zoo"];`);
+    statements.push(`  nwr(${around})["tourism"="aquarium"];`);
+  }
+  if (categories.includes('shelter')) {
+    statements.push(`  nwr(${around})["amenity"="animal_shelter"];`);
+    statements.push(`  nwr(${around})["amenity"="animal_boarding"];`);
+  }
+  if (categories.includes('vet')) {
+    statements.push(`  nwr(${around})["amenity"="veterinary"];`);
+  }
+
+  return `[out:json][timeout:20];
+(
+${statements.join('\n')}
+);
+out center 60;`;
 }
 
 export async function fetchNearbyWildlifePlaces(params: {
   lat: number;
   lng: number;
   radiusKm: number;
+  categories?: NearbyCategory[] | Set<NearbyCategory>;
   forceRefresh?: boolean;
+  skipCacheRead?: boolean;
   signal?: AbortSignal;
 }): Promise<NearbyPlace[]> {
-  const { lat, lng, radiusKm, forceRefresh = false, signal } = params;
-  const cacheKey = `${lat.toFixed(2)},${lng.toFixed(2)}:${radiusKm}`;
+  const {
+    lat,
+    lng,
+    radiusKm,
+    categories,
+    forceRefresh = false,
+    skipCacheRead = false,
+    signal,
+  } = params;
 
-  if (!forceRefresh) {
-    const cached = overpassCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < OVERPASS_CACHE_TTL_MS) {
-      return cached.data.map((p) => ({
-        ...p,
-        distanceKm: haversineKm(lat, lng, p.lat, p.lng),
-      }));
-    }
+  const clampedRadius = clampNearbyRadiusKm(radiusKm);
+  const activeCategories = normalizeNearbyCategories(categories);
+  const cacheKey = buildCacheKey({
+    lat,
+    lng,
+    radiusKm: clampedRadius,
+    categories: activeCategories,
+  });
 
-    const existingPromise = inFlightRequests.get(cacheKey);
-    if (existingPromise) {
-      return existingPromise;
+  if (!forceRefresh && !skipCacheRead) {
+    const cached = getCachedNearbyPlaces({
+      lat,
+      lng,
+      radiusKm: clampedRadius,
+      categories: activeCategories,
+    });
+    if (cached) {
+      return cached;
     }
   }
 
-  const bbox = buildBoundingBox(lat, lng, radiusKm);
-  const query = `
-[out:json][timeout:18][bbox:${bbox}];
-(
-  nwr["leisure"="nature_reserve"];
-  nwr["boundary"="protected_area"];
-  nwr["boundary"="national_park"];
-  nwr["tourism"="zoo"];
-  nwr["tourism"="aquarium"];
-  nwr["amenity"="animal_shelter"];
-  nwr["amenity"="veterinary"];
-  nwr["amenity"="animal_boarding"];
-);
-out center tags 200;
-`.trim();
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
 
-  const runFetch = async (): Promise<NearbyPlace[]> => {
+  const query = buildOverpassQuery(lat, lng, clampedRadius, activeCategories);
+  const startedAt = Date.now();
+  let totalTimedOut = false;
+
+  let activeAttemptController: AbortController | null = null;
+  const totalTimeoutId = setTimeout(() => {
+    totalTimedOut = true;
+    activeAttemptController?.abort();
+  }, OVERPASS_TOTAL_TIMEOUT_MS);
+
+  try {
     let elements: any[] | null = null;
     let lastError: Error | null = null;
 
@@ -170,14 +340,31 @@ out center tags 200;
       if (signal?.aborted) {
         throw new DOMException('Aborted', 'AbortError');
       }
+      if (totalTimedOut) {
+        throw new Error(OVERPASS_TIMEOUT_MESSAGE);
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      const remainingTotalMs = OVERPASS_TOTAL_TIMEOUT_MS - elapsedMs;
+      if (remainingTotalMs <= 200) {
+        totalTimedOut = true;
+        throw new Error(OVERPASS_TIMEOUT_MESSAGE);
+      }
 
       const attemptController = new AbortController();
-      const timeoutId = setTimeout(() => attemptController.abort(), 18000);
+      activeAttemptController = attemptController;
+      let attemptTimedOut = false;
+
+      const perServerMs = Math.min(OVERPASS_SERVER_TIMEOUT_MS, remainingTotalMs);
+      const serverTimeoutId = setTimeout(() => {
+        attemptTimedOut = true;
+        attemptController.abort();
+      }, perServerMs);
+
       const onParentAbort = () => attemptController.abort();
       signal?.addEventListener('abort', onParentAbort, { once: true });
 
       try {
-        // Simple GET request avoids CORS preflight OPTIONS and works cleanly across Overpass mirrors
         const url = `${endpoint}?data=${encodeURIComponent(query)}`;
         const res = await fetch(url, { signal: attemptController.signal });
 
@@ -187,9 +374,7 @@ out center tags 200;
               'Map search is busy right now. Please wait a moment and tap Retry.'
             );
           } else if (res.status === 504) {
-            lastError = new Error(
-              'Search took too long for this area. Try a smaller radius or tap Retry.'
-            );
+            lastError = new Error(OVERPASS_TIMEOUT_MESSAGE);
           } else {
             lastError = new Error(`Could not load nearby places (${res.status}).`);
           }
@@ -203,43 +388,53 @@ out center tags 200;
         if (signal?.aborted) {
           throw new DOMException('Aborted', 'AbortError');
         }
-        if (err?.name === 'AbortError') {
-          lastError = new Error(
-            'Search timed out for this area. Try a smaller radius or tap Retry.'
-          );
-        } else {
-          lastError = new Error(
-            'Could not reach OpenStreetMap right now. Please wait a moment and tap Retry.'
-          );
+        if (totalTimedOut) {
+          throw new Error(OVERPASS_TIMEOUT_MESSAGE);
         }
+        if (attemptTimedOut || err?.name === 'AbortError') {
+          lastError = new Error(OVERPASS_TIMEOUT_MESSAGE);
+          continue;
+        }
+        lastError = new Error(
+          'Could not reach OpenStreetMap right now. Please wait a moment and tap Retry.'
+        );
       } finally {
-        clearTimeout(timeoutId);
+        clearTimeout(serverTimeoutId);
         signal?.removeEventListener('abort', onParentAbort);
+        if (activeAttemptController === attemptController) {
+          activeAttemptController = null;
+        }
       }
     }
 
     if (elements === null) {
+      if (totalTimedOut) {
+        throw new Error(OVERPASS_TIMEOUT_MESSAGE);
+      }
       const finalError =
         lastError ||
-        new Error('Could not reach OpenStreetMap right now. Please wait a moment and tap Retry.');
+        new Error(
+          'Could not reach OpenStreetMap right now. Please wait a moment and tap Retry.'
+        );
       console.warn('Overpass lookup failed across mirrors:', finalError.message);
       throw finalError;
     }
 
     const seenIds = new Set<string>();
+    const activeCatSet = new Set<NearbyCategory>(activeCategories);
     const places: NearbyPlace[] = [];
 
     for (const el of elements) {
       const tags: Record<string, string> = el?.tags || {};
       const classified = classifyOsmTags(tags);
-      if (!classified) continue;
+      if (!classified || !activeCatSet.has(classified.category)) continue;
 
       const elLat = typeof el.lat === 'number' ? el.lat : el?.center?.lat;
       const elLng = typeof el.lon === 'number' ? el.lon : el?.center?.lon;
       if (typeof elLat !== 'number' || typeof elLng !== 'number') continue;
 
       const distanceKm = haversineKm(lat, lng, elLat, elLng);
-      if (distanceKm > radiusKm * 1.15) continue;
+      if (distanceKm > clampedRadius * 1.15) continue;
 
       const uniqueId = `${el.type || 'node'}-${el.id}`;
       if (seenIds.has(uniqueId)) continue;
@@ -263,21 +458,39 @@ out center tags 200;
         website,
         phone,
       });
+
+      if (places.length >= 60) break;
     }
 
     places.sort((a, b) => a.distanceKm - b.distanceKm);
-    overpassCache.set(cacheKey, { timestamp: Date.now(), data: places });
+    setCachedNearbyPlaces(cacheKey, places);
     return places;
-  };
-
-  const promise = runFetch().finally(() => {
-    inFlightRequests.delete(cacheKey);
-  });
-
-  inFlightRequests.set(cacheKey, promise);
-  return promise;
+  } finally {
+    clearTimeout(totalTimeoutId);
+  }
 }
 
+async function waitWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Search cities using Nominatim with 1 req/sec rate limit, limit=1, and polite headers.
+ */
 export async function searchCityNominatim(
   query: string,
   signal?: AbortSignal
@@ -285,13 +498,29 @@ export async function searchCityNominatim(
   const trimmed = query.trim();
   if (trimmed.length < 2) return [];
 
+  // Enforce max 1 request per second
+  const elapsed = Date.now() - lastNominatimRequestAt;
+  if (elapsed < 1000) {
+    await waitWithAbort(1000 - elapsed, signal);
+  }
+
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+
+  lastNominatimRequestAt = Date.now();
+
   try {
     const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
       trimmed
-    )}&limit=5`;
+    )}&limit=1`;
     const res = await fetch(url, {
       signal,
-      headers: { Accept: 'application/json' },
+      referrerPolicy: 'strict-origin-when-cross-origin',
+      headers: {
+        Accept: 'application/json',
+        'Accept-Language': 'en',
+      },
     });
     if (!res.ok) {
       throw new Error(`City search failed (${res.status}).`);
@@ -299,6 +528,7 @@ export async function searchCityNominatim(
     const data = await res.json();
     if (!Array.isArray(data)) return [];
     return data
+      .slice(0, 1)
       .map((item: any): NominatimCityResult | null => {
         const lat = Number(item?.lat);
         const lng = Number(item?.lon);
@@ -315,5 +545,340 @@ export async function searchCityNominatim(
     if (err?.name === 'AbortError') throw err;
     console.warn('Nominatim search warning:', err?.message || err);
     throw new Error('Could not search cities right now. Please try again.');
+  }
+}
+
+// ==============================================================================
+// Web Search ("Search the web for more places" via Supabase Edge Function `nearby`)
+// ==============================================================================
+
+export interface WebNearbyPlace {
+  name: string;
+  type: string;
+  whatYouCanSee: string;
+  distanceHint: string;
+  website?: string;
+}
+
+export interface WebNearbySource {
+  title: string;
+  url: string;
+}
+
+export interface WebNearbyResult {
+  city: string;
+  places: WebNearbyPlace[];
+  sources: WebNearbySource[];
+}
+
+export const WEB_NEARBY_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+export const WEB_NEARBY_TIMEOUT_MS = 45 * 1000; // 45 seconds
+export const WEB_NEARBY_COOLDOWN_MS = 10 * 1000; // 10 seconds
+export const WEB_NEARBY_429_BLOCK_MS = 30 * 60 * 1000; // 30 minutes
+export const WEB_NEARBY_DAILY_LIMIT_MESSAGE =
+  'Web search is at its daily limit. Showing places from OpenStreetMap instead';
+
+const WEB_NEARBY_CACHE_PREFIX = 'wilddex_nearby_web:v1:';
+const WEB_NEARBY_BLOCK_PREFIX = 'wilddex_nearby_web_block:v1:';
+const webNearbyBlockedUntilMap = new Map<string, number>();
+let lastWebNearbyRequestAt = 0;
+
+export class WebNearbyRateLimitError extends Error {
+  status = 429;
+  isRateLimited = true;
+  constructor(message = WEB_NEARBY_DAILY_LIMIT_MESSAGE) {
+    super(message);
+    this.name = 'WebNearbyRateLimitError';
+  }
+}
+
+function normalizeCityCacheKey(city: string): string {
+  return `${WEB_NEARBY_CACHE_PREFIX}${city.trim().toLowerCase()}`;
+}
+
+function normalizeCityBlockKey(city: string): string {
+  return `${WEB_NEARBY_BLOCK_PREFIX}${city.trim().toLowerCase()}`;
+}
+
+export function isWebNearbyCityBlocked(city: string): boolean {
+  const trimmed = city.trim().toLowerCase();
+  if (!trimmed) return false;
+
+  const now = Date.now();
+  const memUntil = webNearbyBlockedUntilMap.get(trimmed);
+  if (typeof memUntil === 'number') {
+    if (now < memUntil) return true;
+    webNearbyBlockedUntilMap.delete(trimmed);
+  }
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    const key = normalizeCityBlockKey(trimmed);
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw) as { blockedUntil?: number };
+        if (typeof parsed?.blockedUntil === 'number' && now < parsed.blockedUntil) {
+          webNearbyBlockedUntilMap.set(trimmed, parsed.blockedUntil);
+          return true;
+        }
+        window.localStorage.removeItem(key);
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+  }
+
+  return false;
+}
+
+function blockWebNearbyForCity(city: string): void {
+  const trimmed = city.trim().toLowerCase();
+  if (!trimmed) return;
+  const blockedUntil = Date.now() + WEB_NEARBY_429_BLOCK_MS;
+  webNearbyBlockedUntilMap.set(trimmed, blockedUntil);
+
+  if (typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(
+        normalizeCityBlockKey(trimmed),
+        JSON.stringify({ blockedUntil })
+      );
+    } catch {
+      // Ignore storage write errors
+    }
+  }
+}
+
+export function getWebNearbyCooldownRemainingSeconds(): number {
+  if (!lastWebNearbyRequestAt) return 0;
+  const remainingMs = WEB_NEARBY_COOLDOWN_MS - (Date.now() - lastWebNearbyRequestAt);
+  return remainingMs > 0 ? Math.ceil(remainingMs / 1000) : 0;
+}
+
+export function getCachedWebNearbyPlaces(city: string): WebNearbyResult | null {
+  const trimmed = city.trim();
+  if (!trimmed || typeof window === 'undefined' || !window.localStorage) {
+    return null;
+  }
+
+  const key = normalizeCityCacheKey(trimmed);
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CacheEntry<WebNearbyResult>;
+    if (
+      parsed &&
+      typeof parsed.timestamp === 'number' &&
+      parsed.data &&
+      Array.isArray(parsed.data.places) &&
+      Date.now() - parsed.timestamp < WEB_NEARBY_CACHE_TTL_MS
+    ) {
+      return parsed.data;
+    }
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage read/parse errors
+  }
+
+  return null;
+}
+
+function setCachedWebNearbyPlaces(city: string, data: WebNearbyResult): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
+  const key = normalizeCityCacheKey(city);
+  const entry: CacheEntry<WebNearbyResult> = {
+    timestamp: Date.now(),
+    data,
+  };
+  try {
+    window.localStorage.setItem(key, JSON.stringify(entry));
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
+function normalizeWebUrl(raw?: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const cleaned = raw.trim();
+  if (!cleaned) return undefined;
+  if (/^https?:\/\//i.test(cleaned)) return cleaned;
+  if (cleaned.includes('.') && !cleaned.includes(' ')) {
+    return `https://${cleaned}`;
+  }
+  return undefined;
+}
+
+export async function searchMorePlacesOnWeb(params: {
+  city: string;
+  forceRefresh?: boolean;
+}): Promise<WebNearbyResult> {
+  const city = params.city.trim();
+  if (!city) {
+    throw new Error('Select or search a city first.');
+  }
+
+  if (isWebNearbyCityBlocked(city)) {
+    throw new WebNearbyRateLimitError();
+  }
+
+  if (!params.forceRefresh) {
+    const cached = getCachedWebNearbyPlaces(city);
+    if (cached) {
+      return cached;
+    }
+  }
+
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  const waitSeconds = getWebNearbyCooldownRemainingSeconds();
+  if (waitSeconds > 0) {
+    throw new Error(
+      `Please wait ${waitSeconds}s before searching the web again.`
+    );
+  }
+
+  lastWebNearbyRequestAt = Date.now();
+
+  const abortController = new AbortController();
+  let timedOut = false;
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    abortController.abort();
+  }, WEB_NEARBY_TIMEOUT_MS);
+
+  try {
+    const invokeResult: any = await supabase.functions.invoke('nearby', {
+      body: { city },
+      timeout: WEB_NEARBY_TIMEOUT_MS,
+      signal: abortController.signal,
+    } as any);
+
+    const { data, error } = invokeResult || {};
+
+    if (error || data?.error) {
+      const statusCode: number | undefined =
+        error?.context?.status ?? error?.status ?? data?.status;
+
+      let parsedErr: any = null;
+      if (error?.context && typeof error.context.json === 'function') {
+        try {
+          parsedErr = await error.context.json();
+        } catch {
+          if (typeof error.context.text === 'function') {
+            try {
+              const text = await error.context.text();
+              parsedErr = JSON.parse(text);
+            } catch {
+              // Ignore secondary parse error
+            }
+          }
+        }
+      } else if (data?.error) {
+        parsedErr = data;
+      }
+
+      const extractedMessage =
+        (parsedErr &&
+          typeof parsedErr === 'object' &&
+          (parsedErr.error || parsedErr.message)) ||
+        (typeof parsedErr === 'string' && parsedErr) ||
+        (typeof data?.error === 'string' && data.error) ||
+        error?.message ||
+        'Web search failed. Please try again.';
+
+      const is429 =
+        statusCode === 429 ||
+        parsedErr?.status === 429 ||
+        String(extractedMessage).includes('429');
+
+      if (is429) {
+        blockWebNearbyForCity(city);
+        throw new WebNearbyRateLimitError();
+      }
+
+      throw new Error(String(extractedMessage));
+    }
+
+    const rawPlaces: any[] = Array.isArray(data?.places)
+      ? data.places
+      : Array.isArray(data?.results)
+      ? data.results
+      : [];
+
+    const places: WebNearbyPlace[] = rawPlaces
+      .filter((p) => p && (p.name || p.title))
+      .map((p) => {
+        const whatRaw =
+          p.whatYouCanSee ??
+          p.what_you_can_see ??
+          p.wildlife ??
+          p.species ??
+          p.highlights ??
+          p.description ??
+          '';
+        const whatYouCanSee = Array.isArray(whatRaw)
+          ? whatRaw.filter(Boolean).join(', ')
+          : String(whatRaw || '').trim();
+
+        return {
+          name: String(p.name || p.title).trim(),
+          type: String(p.type || p.category || p.typeLabel || 'Wildlife Place').trim(),
+          whatYouCanSee,
+          distanceHint: String(
+            p.distanceHint || p.distance_hint || p.distance || ''
+          ).trim(),
+          website: normalizeWebUrl(p.website || p.url || p.link),
+        };
+      });
+
+    const rawSources: any[] = Array.isArray(data?.sources)
+      ? data.sources
+      : Array.isArray(data?.citations)
+      ? data.citations
+      : [];
+
+    const seenSourceUrls = new Set<string>();
+    const sources: WebNearbySource[] = [];
+
+    for (const s of rawSources) {
+      if (typeof s === 'string') {
+        const url = normalizeWebUrl(s);
+        if (url && !seenSourceUrls.has(url)) {
+          seenSourceUrls.add(url);
+          sources.push({ title: url.replace(/^https?:\/\/(www\.)?/i, '').split('/')[0], url });
+        }
+      } else if (s && typeof s === 'object') {
+        const url = normalizeWebUrl(s.url || s.uri || s.link);
+        if (url && !seenSourceUrls.has(url)) {
+          seenSourceUrls.add(url);
+          const fallbackHost = url.replace(/^https?:\/\/(www\.)?/i, '').split('/')[0];
+          sources.push({
+            title: String(s.title || s.name || fallbackHost).trim() || fallbackHost,
+            url,
+          });
+        }
+      }
+    }
+
+    const result: WebNearbyResult = {
+      city,
+      places,
+      sources,
+    };
+
+    setCachedWebNearbyPlaces(city, result);
+    return result;
+  } catch (err: any) {
+    if (err instanceof WebNearbyRateLimitError) {
+      throw err;
+    }
+    if (timedOut || err?.name === 'AbortError') {
+      throw new Error('Web search timed out after 45 seconds. Please try again.');
+    }
+    throw err instanceof Error ? err : new Error('Web search failed. Please try again.');
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

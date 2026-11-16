@@ -479,6 +479,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
           if (error) {
             console.warn('Failed to update Supabase profile:', error);
+            throw error;
           }
         }
       }
@@ -486,6 +487,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUserProfile((prev) => (prev ? { ...prev, ...data } : null));
     } catch (error) {
       console.error('Error updating user profile:', error);
+      throw error;
     }
   };
 

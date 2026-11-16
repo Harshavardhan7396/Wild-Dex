@@ -804,19 +804,22 @@ export const SharedCollectionPage: React.FC = () => {
                       key={member.id}
                       className="flex items-center justify-between gap-2 py-2 first:pt-1 last:pb-1"
                     >
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <Link
+                        to={`/u/${encodeURIComponent(member.profile.username)}`}
+                        className="flex items-center gap-2.5 min-w-0 flex-1 group"
+                      >
                         <AvatarCircle
                           avatarUrl={member.profile.avatarUrl}
                           name={member.profile.displayName || member.profile.username}
                           sizeClass="w-9 h-9"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="font-label-md text-label-md font-bold text-on-surface truncate">
+                          <p className="font-label-md text-label-md font-bold text-on-surface group-hover:text-primary transition-colors truncate">
                             {member.profile.username}
                             {isMe ? ' (You)' : ''}
                           </p>
                         </div>
-                      </div>
+                      </Link>
 
                       <div className="flex items-center gap-2 shrink-0">
                         <span

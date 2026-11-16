@@ -422,21 +422,26 @@ export const LeaderboardPage: React.FC = () => {
                     <span className="w-7 text-center font-bold text-sm text-on-surface-variant shrink-0">
                       #{entry.rank}
                     </span>
-                    <AvatarCircle
-                      avatarUrl={entry.avatarUrl}
-                      name={entry.displayName || entry.username}
-                      sizeClass="w-9 h-9"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-label-md text-label-md font-bold truncate">
-                        {entry.username}
-                        {isMe ? ' (You)' : ''}
-                      </p>
-                      <p className="font-body-sm text-[11px] text-on-surface-variant">
-                        {entry.speciesCount}{' '}
-                        {entry.speciesCount === 1 ? 'species' : 'species'}
-                      </p>
-                    </div>
+                    <Link
+                      to={`/u/${encodeURIComponent(entry.username)}`}
+                      className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 group"
+                    >
+                      <AvatarCircle
+                        avatarUrl={entry.avatarUrl}
+                        name={entry.displayName || entry.username}
+                        sizeClass="w-9 h-9"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-label-md text-label-md font-bold truncate group-hover:text-primary transition-colors">
+                          {entry.username}
+                          {isMe ? ' (You)' : ''}
+                        </p>
+                        <p className="font-body-sm text-[11px] text-on-surface-variant">
+                          {entry.speciesCount}{' '}
+                          {entry.speciesCount === 1 ? 'species' : 'species'}
+                        </p>
+                      </div>
+                    </Link>
                   </div>
                   <div className="text-right shrink-0">
                     <span className="font-headline-sm text-sm font-bold text-secondary">
@@ -461,19 +466,24 @@ export const LeaderboardPage: React.FC = () => {
                     <span className="w-7 text-center font-bold text-sm text-primary shrink-0">
                       #{myRowOutsideTop.rank}
                     </span>
-                    <AvatarCircle
-                      avatarUrl={myRowOutsideTop.avatarUrl}
-                      name={myRowOutsideTop.displayName || myRowOutsideTop.username}
-                      sizeClass="w-9 h-9"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-label-md text-label-md font-bold truncate">
-                        {myRowOutsideTop.username} (You)
-                      </p>
-                      <p className="font-body-sm text-[11px] text-on-surface-variant">
-                        {myRowOutsideTop.speciesCount} species
-                      </p>
-                    </div>
+                    <Link
+                      to={`/u/${encodeURIComponent(myRowOutsideTop.username)}`}
+                      className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1 group"
+                    >
+                      <AvatarCircle
+                        avatarUrl={myRowOutsideTop.avatarUrl}
+                        name={myRowOutsideTop.displayName || myRowOutsideTop.username}
+                        sizeClass="w-9 h-9"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-label-md text-label-md font-bold truncate group-hover:text-primary transition-colors">
+                          {myRowOutsideTop.username} (You)
+                        </p>
+                        <p className="font-body-sm text-[11px] text-on-surface-variant">
+                          {myRowOutsideTop.speciesCount} species
+                        </p>
+                      </div>
+                    </Link>
                   </div>
                   <div className="text-right shrink-0">
                     <span className="font-headline-sm text-sm font-bold text-secondary">

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PUBLIC_SITE_URL } from '../services/sharedAlbumService';
+import { FindPeopleBox } from '../components/common/FindPeopleBox';
 
 export const InviteFriendsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -74,6 +75,9 @@ export const InviteFriendsPage: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {/* Find People */}
+      <FindPeopleBox />
 
       {/* Tactile QR Code Card */}
       <div className="p-3 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm flex flex-col items-center gap-4">

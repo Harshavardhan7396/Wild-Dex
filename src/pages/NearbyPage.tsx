@@ -7,11 +7,21 @@ import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
 import {
+  DEFAULT_NEARBY_RADIUS_KM,
+  MAX_NEARBY_RADIUS_KM,
   NearbyCategory,
   NearbyPlace,
   NominatimCityResult,
+  WEB_NEARBY_DAILY_LIMIT_MESSAGE,
+  WebNearbyRateLimitError,
+  WebNearbyResult,
   fetchNearbyWildlifePlaces,
+  getCachedNearbyPlaces,
+  getCachedWebNearbyPlaces,
+  getWebNearbyCooldownRemainingSeconds,
+  isWebNearbyCityBlocked,
   searchCityNominatim,
+  searchMorePlacesOnWeb,
   haversineKm,
   formatDistanceKm,
 } from '../services/nearbyService';
@@ -24,7 +34,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl: markerShadow,
 });
 
-const RADIUS_OPTIONS = [5, 10, 25, 50] as const;
+const RADIUS_OPTIONS = [5, 10, 25] as const;
 
 interface CategoryMeta {
   id: NearbyCategory;
@@ -157,10 +167,10 @@ export const NearbyPage: React.FC = () => {
   const [cityLoading, setCityLoading] = useState(false);
   const [cityError, setCityError] = useState<string | null>(null);
   const [cityLabel, setCityLabel] = useState<string>('');
-  const lastNominatimAtRef = useRef<number>(0);
+  const confirmedCityInputRef = useRef<string>('');
 
   // Overpass search state
-  const [radiusKm, setRadiusKm] = useState<number>(10);
+  const [radiusKm, setRadiusKm] = useState<number>(DEFAULT_NEARBY_RADIUS_KM);
   const [selectedCategories, setSelectedCategories] = useState<Set<NearbyCategory>>(
     () => new Set(['reserve', 'zoo', 'shelter', 'vet'])
   );
@@ -169,9 +179,22 @@ export const NearbyPage: React.FC = () => {
   const [placesError, setPlacesError] = useState<string | null>(null);
   const [retryTick, setRetryTick] = useState(0);
   const forceRefreshRef = useRef(false);
+  const activePlacesAbortRef = useRef<AbortController | null>(null);
 
-  // Track last Overpass fetch coordinates + radius so we only re-query on >= 1 km move or radius change
-  const lastQueriedRef = useRef<{ lat: number; lng: number; radiusKm: number } | null>(null);
+  // Web search ("Search the web for more places") state
+  const [webResult, setWebResult] = useState<WebNearbyResult | null>(null);
+  const [webLoading, setWebLoading] = useState(false);
+  const [webError, setWebError] = useState<string | null>(null);
+  const [webRateLimited, setWebRateLimited] = useState(false);
+  const [webCooldownSec, setWebCooldownSec] = useState<number>(0);
+
+  // Track last Overpass fetch coordinates, radius, and filters
+  const lastQueriedRef = useRef<{
+    lat: number;
+    lng: number;
+    radiusKm: number;
+    categoriesKey: string;
+  } | null>(null);
   const locationModeRef = useRef(locationMode);
   locationModeRef.current = locationMode;
 
@@ -179,6 +202,7 @@ export const NearbyPage: React.FC = () => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const blueDotMarkerRef = useRef<L.Marker | null>(null);
+  const cityMarkerRef = useRef<L.Marker | null>(null);
   const radiusCircleRef = useRef<L.Circle | null>(null);
   const placeMarkersLayerRef = useRef<L.LayerGroup | null>(null);
   const markerByPlaceIdRef = useRef<Map<string, L.Marker>>(new Map());
@@ -266,7 +290,7 @@ export const NearbyPage: React.FC = () => {
     };
   }, [savedHomeCenter]);
 
-  // 2. Debounced Nominatim city search (max 1 req/sec)
+  // 2. 300ms debounced Nominatim city search (limit=1, 1 req/sec enforced in service)
   useEffect(() => {
     const trimmed = cityQuery.trim();
     if (!showCitySearch || trimmed.length < 2) {
@@ -276,51 +300,11 @@ export const NearbyPage: React.FC = () => {
       return;
     }
 
-    let cancelled = false;
-    const controller = new AbortController();
-    const elapsed = Date.now() - lastNominatimAtRef.current;
-    const waitMs = Math.max(400, 1000 - elapsed);
-
-    const timer = setTimeout(async () => {
-      if (cancelled) return;
-      setCityLoading(true);
+    // Do not re-query when input holds the already-confirmed matching place name
+    if (confirmedCityInputRef.current && trimmed === confirmedCityInputRef.current) {
+      setCityResults([]);
+      setCityLoading(false);
       setCityError(null);
-      lastNominatimAtRef.current = Date.now();
-
-      try {
-        const results = await searchCityNominatim(trimmed, controller.signal);
-        if (!cancelled) {
-          setCityResults(results);
-        }
-      } catch (err: any) {
-        if (err?.name === 'AbortError' || cancelled) return;
-        setCityError(err?.message || 'Could not search cities right now.');
-        setCityResults([]);
-      } finally {
-        if (!cancelled && !controller.signal.aborted) {
-          setCityLoading(false);
-        }
-      }
-    }, waitMs);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [cityQuery, showCitySearch]);
-
-  // 3. Query Overpass API with debounce ONLY when moving >= ~1 km or changing radius
-  useEffect(() => {
-    if (!searchCenter) return;
-
-    const prev = lastQueriedRef.current;
-    const movedKm = prev ? haversineKm(prev.lat, prev.lng, searchCenter.lat, searchCenter.lng) : Infinity;
-    const radiusChanged = !prev || prev.radiusKm !== radiusKm;
-
-    const shouldForce = forceRefreshRef.current;
-
-    if (!shouldForce && prev && !radiusChanged && movedKm < 1.0) {
       return;
     }
 
@@ -329,28 +313,105 @@ export const NearbyPage: React.FC = () => {
 
     const timer = setTimeout(async () => {
       if (cancelled) return;
-      setLoadingPlaces(true);
-      setPlacesError(null);
+      setCityLoading(true);
+      setCityError(null);
 
+      try {
+        const results = await searchCityNominatim(trimmed, controller.signal);
+        if (!cancelled) {
+          setCityResults(results);
+          if (results.length === 0) {
+            setCityError('City not found');
+          }
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError' || cancelled) return;
+        setCityError(err?.message || 'City search failed. Please try again.');
+        setCityResults([]);
+      } finally {
+        if (!cancelled && !controller.signal.aborted) {
+          setCityLoading(false);
+        }
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [cityQuery, showCitySearch]);
+
+  const selectedCategoriesArray = useMemo(
+    () => Array.from(selectedCategories).sort(),
+    [selectedCategories]
+  );
+  const selectedCategoriesKey = selectedCategoriesArray.join(',');
+
+  // 3. Query Overpass with AbortController cancellation, 30-min cache SWR, and 25s max timeout
+  useEffect(() => {
+    if (!searchCenter) return;
+
+    const clampedRadius = Math.min(MAX_NEARBY_RADIUS_KM, Math.max(1, radiusKm));
+    const prev = lastQueriedRef.current;
+    const movedKm = prev ? haversineKm(prev.lat, prev.lng, searchCenter.lat, searchCenter.lng) : Infinity;
+    const radiusChanged = !prev || prev.radiusKm !== clampedRadius;
+    const filtersChanged = !prev || prev.categoriesKey !== selectedCategoriesKey;
+    const shouldForce = forceRefreshRef.current;
+
+    if (!shouldForce && prev && !radiusChanged && !filtersChanged && movedKm < 1.0) {
+      return;
+    }
+
+    // Abort any prior in-flight Overpass request immediately
+    activePlacesAbortRef.current?.abort();
+    const controller = new AbortController();
+    activePlacesAbortRef.current = controller;
+    let cancelled = false;
+
+    // Show cached results right away (if available) while refreshing in the background
+    const cached = !shouldForce
+      ? getCachedNearbyPlaces({
+          lat: searchCenter.lat,
+          lng: searchCenter.lng,
+          radiusKm: clampedRadius,
+          categories: selectedCategoriesArray,
+        })
+      : null;
+
+    if (cached) {
+      setPlaces(cached);
+    } else {
+      setPlaces([]);
+    }
+
+    setPlacesError(null);
+    setLoadingPlaces(true);
+
+    const run = async () => {
       try {
         const results = await fetchNearbyWildlifePlaces({
           lat: searchCenter.lat,
           lng: searchCenter.lng,
-          radiusKm,
+          radiusKm: clampedRadius,
+          categories: selectedCategoriesArray,
           forceRefresh: shouldForce,
+          skipCacheRead: true,
           signal: controller.signal,
         });
 
-        if (!cancelled) {
+        if (!cancelled && !controller.signal.aborted) {
           lastQueriedRef.current = {
             lat: searchCenter.lat,
             lng: searchCenter.lng,
-            radiusKm,
+            radiusKm: clampedRadius,
+            categoriesKey: selectedCategoriesKey,
           };
           setPlaces(results);
+          setPlacesError(null);
         }
       } catch (err: any) {
-        if (err?.name === 'AbortError' || cancelled) return;
+        if (err?.name === 'AbortError' || cancelled || controller.signal.aborted) return;
         setPlacesError(err?.message || 'Could not load nearby wildlife places.');
       } finally {
         if (!cancelled && !controller.signal.aborted) {
@@ -358,14 +419,18 @@ export const NearbyPage: React.FC = () => {
           forceRefreshRef.current = false;
         }
       }
-    }, 450);
+    };
+
+    run();
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
       controller.abort();
+      if (activePlacesAbortRef.current === controller) {
+        activePlacesAbortRef.current = null;
+      }
     };
-  }, [searchCenter, radiusKm, retryTick]);
+  }, [searchCenter, radiusKm, selectedCategoriesKey, retryTick]);
 
   // Recompute distance from user live position (or active search center) and sort
   const referencePoint = livePos || searchCenter;
@@ -422,12 +487,13 @@ export const NearbyPage: React.FC = () => {
       map.remove();
       mapRef.current = null;
       blueDotMarkerRef.current = null;
+      cityMarkerRef.current = null;
       radiusCircleRef.current = null;
       placeMarkersLayerRef.current = null;
     };
   }, []);
 
-  // Center map smoothly when searchCenter first resolves or radius changes
+  // Center map & update city marker immediately when searchCenter or radius changes
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !searchCenter) return;
@@ -456,7 +522,55 @@ export const NearbyPage: React.FC = () => {
         dashArray: '6, 6',
       }).addTo(map);
     }
-  }, [searchCenter, radiusKm]);
+
+    // Show city/area marker immediately when a city or home area is selected
+    if (locationMode === 'city' || locationMode === 'home') {
+      const markerTitle =
+        locationMode === 'city' && cityLabel
+          ? cityLabel
+          : locationMode === 'home'
+          ? 'Your saved home area'
+          : 'Selected area';
+
+      if (cityMarkerRef.current) {
+        cityMarkerRef.current.setLatLng([searchCenter.lat, searchCenter.lng]);
+        cityMarkerRef.current.setPopupContent(`<strong>${escapeHtml(markerTitle)}</strong>`);
+      } else {
+        const cityPinIcon = L.divIcon({
+          className: 'wilddex-city-pin',
+          html: `
+            <div style="
+              width: 36px;
+              height: 36px;
+              border-radius: 9999px;
+              background: #005313;
+              border: 3px solid #ffffff;
+              color: #ffffff;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+            ">
+              <span class="material-symbols-outlined" style="font-size: 20px; line-height: 1;">location_city</span>
+            </div>
+          `,
+          iconSize: [36, 36],
+          iconAnchor: [18, 18],
+          popupAnchor: [0, -18],
+        });
+
+        const marker = L.marker([searchCenter.lat, searchCenter.lng], {
+          icon: cityPinIcon,
+          zIndexOffset: 900,
+        }).addTo(map);
+        marker.bindPopup(`<strong>${escapeHtml(markerTitle)}</strong>`);
+        cityMarkerRef.current = marker;
+      }
+    } else if (cityMarkerRef.current) {
+      cityMarkerRef.current.remove();
+      cityMarkerRef.current = null;
+    }
+  }, [searchCenter, radiusKm, locationMode, cityLabel]);
 
   // Update Blue Dot live whenever watchPosition emits
   useEffect(() => {
@@ -577,6 +691,8 @@ export const NearbyPage: React.FC = () => {
     }
 
     if (livePos && locationMode !== 'live') {
+      confirmedCityInputRef.current = '';
+      setCityQuery('');
       setSearchCenter(livePos);
       setLocationMode('live');
       setCityLabel('');
@@ -592,13 +708,14 @@ export const NearbyPage: React.FC = () => {
     const shortName = place.display_name.split(',').slice(0, 2).join(', ');
     const nextCenter = { lat: place.lat, lng: place.lng };
     lastQueriedRef.current = null; // Force Overpass refresh for newly chosen city
+    confirmedCityInputRef.current = place.display_name;
+    setCityQuery(place.display_name);
     setCityLabel(shortName);
     setLocationMode('city');
     setGeoStatusText(`Showing places near ${shortName}`);
     setSearchCenter(nextCenter);
     setCityResults([]);
-    setCityQuery('');
-    setShowCitySearch(false);
+    setCityError(null);
   };
 
   const toggleCategory = (cat: NearbyCategory) => {
@@ -632,8 +749,138 @@ export const NearbyPage: React.FC = () => {
 
   const handleTryBiggerRadius = () => {
     const nextRadius =
-      RADIUS_OPTIONS.find((r) => r > radiusKm) || 50;
+      RADIUS_OPTIONS.find((r) => r > radiusKm) || MAX_NEARBY_RADIUS_KM;
     setRadiusKm(nextRadius);
+  };
+
+  const searchingNearLabel = cityLabel
+    ? cityLabel
+    : locationMode === 'home'
+    ? 'your home area'
+    : 'you';
+
+  const webSearchCity = useMemo(() => {
+    if (cityLabel) return cityLabel;
+    const homeLabel = (privateData?.homeLabel || userProfile?.homeLabel || '').trim();
+    if (homeLabel) return homeLabel;
+    if (searchCenter) {
+      return `${searchCenter.lat.toFixed(3)}, ${searchCenter.lng.toFixed(3)}`;
+    }
+    return '';
+  }, [cityLabel, privateData?.homeLabel, userProfile?.homeLabel, searchCenter]);
+
+  // Restore 24h localStorage cache & 30m 429 block state for active city
+  useEffect(() => {
+    if (!webSearchCity) {
+      setWebError(null);
+      setWebRateLimited(false);
+      setWebResult(null);
+      return;
+    }
+    const blocked = isWebNearbyCityBlocked(webSearchCity);
+    setWebRateLimited(blocked);
+    setWebError(blocked ? WEB_NEARBY_DAILY_LIMIT_MESSAGE : null);
+    const cached = getCachedWebNearbyPlaces(webSearchCity);
+    setWebResult(cached);
+  }, [webSearchCity]);
+
+  // Update 10-second rate-limit cooldown countdown cleanly
+  useEffect(() => {
+    if (webCooldownSec <= 0) return;
+    const timer = setTimeout(() => {
+      setWebCooldownSec(getWebNearbyCooldownRemainingSeconds());
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [webCooldownSec]);
+
+  const runNominatimListFallback = async (city: string) => {
+    const cleanCity = city.trim();
+    if (!cleanCity) return;
+
+    try {
+      const matches = await searchCityNominatim(cleanCity);
+      if (matches.length > 0) {
+        const match = matches[0];
+        const shortName = match.display_name.split(',').slice(0, 2).join(', ');
+        confirmedCityInputRef.current = match.display_name;
+        setCityQuery(match.display_name);
+        setCityLabel(shortName);
+        setLocationMode('city');
+        setGeoStatusText(`Showing places near ${shortName}`);
+        lastQueriedRef.current = null;
+        forceRefreshRef.current = true;
+        setSearchCenter({ lat: match.lat, lng: match.lng });
+        return;
+      }
+    } catch {
+      // If Nominatim fails or is unavailable, still trigger OpenStreetMap places search
+    }
+
+    lastQueriedRef.current = null;
+    forceRefreshRef.current = true;
+    setRetryTick((t) => t + 1);
+  };
+
+  const handleSearchWebMorePlaces = async (forceRefresh = false) => {
+    if (webLoading || webRateLimited) return;
+
+    if (!webSearchCity) {
+      setShowCitySearch(true);
+      setWebError('Select or search a city first.');
+      return;
+    }
+
+    if (isWebNearbyCityBlocked(webSearchCity)) {
+      setWebRateLimited(true);
+      setWebError(WEB_NEARBY_DAILY_LIMIT_MESSAGE);
+      await runNominatimListFallback(webSearchCity);
+      return;
+    }
+
+    if (!forceRefresh) {
+      const cached = getCachedWebNearbyPlaces(webSearchCity);
+      if (cached) {
+        setWebError(null);
+        setWebResult(cached);
+        return;
+      }
+    }
+
+    const remaining = getWebNearbyCooldownRemainingSeconds();
+    if (remaining > 0) {
+      setWebCooldownSec(remaining);
+      setWebError(`Please wait ${remaining}s before searching the web again.`);
+      return;
+    }
+
+    setWebLoading(true);
+    setWebError(null);
+    try {
+      const res = await searchMorePlacesOnWeb({
+        city: webSearchCity,
+        forceRefresh,
+      });
+      setWebResult(res);
+      setWebCooldownSec(getWebNearbyCooldownRemainingSeconds());
+    } catch (err: any) {
+      const is429 =
+        err instanceof WebNearbyRateLimitError ||
+        err?.isRateLimited === true ||
+        err?.status === 429 ||
+        isWebNearbyCityBlocked(webSearchCity);
+
+      if (is429) {
+        setWebRateLimited(true);
+        setWebError(WEB_NEARBY_DAILY_LIMIT_MESSAGE);
+        setWebCooldownSec(0);
+        await runNominatimListFallback(webSearchCity);
+      } else {
+        setWebError(err?.message || 'Web search failed. Please try again.');
+        setWebCooldownSec(getWebNearbyCooldownRemainingSeconds());
+      }
+    } finally {
+      setWebLoading(false);
+    }
   };
 
   return (
@@ -691,14 +938,22 @@ export const NearbyPage: React.FC = () => {
               id="nearby-city-search"
               type="text"
               value={cityQuery}
-              onChange={(e) => setCityQuery(e.target.value)}
+              onChange={(e) => {
+                confirmedCityInputRef.current = '';
+                setCityQuery(e.target.value);
+              }}
               placeholder="Type a city, town, or park area..."
               className="w-full min-w-0 min-h-[46px] bg-surface-container pl-10 pr-10 py-2 rounded-full font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/50"
             />
             {cityQuery && (
               <button
                 type="button"
-                onClick={() => setCityQuery('')}
+                onClick={() => {
+                  confirmedCityInputRef.current = '';
+                  setCityQuery('');
+                  setCityResults([]);
+                  setCityError(null);
+                }}
                 aria-label="Clear city search"
                 className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high"
               >
@@ -712,39 +967,46 @@ export const NearbyPage: React.FC = () => {
               <span className="material-symbols-outlined text-[18px] animate-spin text-primary">
                 progress_activity
               </span>
-              <span>Searching places...</span>
+              <span>Finding city...</span>
             </div>
           )}
 
           {!cityLoading && cityError && (
-            <p className="font-body-sm text-body-sm text-error">{cityError}</p>
+            <div className="p-2.5 rounded-xl bg-error-container/25 border border-error/30 flex items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-error shrink-0">
+                location_off
+              </span>
+              <p className="font-body-sm text-body-sm text-error font-medium">{cityError}</p>
+            </div>
           )}
 
-          {!cityLoading && !cityError && cityQuery.trim().length >= 2 && (
-            <div className="space-y-1.5">
-              {cityResults.length === 0 ? (
-                <p className="font-body-sm text-body-sm text-on-surface-variant">
-                  No matching city found. Try another name.
-                </p>
-              ) : (
-                cityResults.map((place) => (
+          {!cityLoading &&
+            !cityError &&
+            cityResults.length > 0 &&
+            cityQuery.trim() !== confirmedCityInputRef.current && (
+              <div className="space-y-1.5">
+                {cityResults.map((place) => (
                   <button
                     key={place.place_id}
                     type="button"
                     onClick={() => handleSelectCity(place)}
-                    className="w-full p-2.5 min-h-[44px] rounded-xl bg-surface-container hover:bg-surface-container-high text-left flex items-start gap-2 transition-colors"
+                    className="w-full p-2.5 min-h-[44px] rounded-xl bg-surface-container hover:bg-surface-container-high text-left flex items-center justify-between gap-2 transition-colors border border-primary/20"
                   >
-                    <span className="material-symbols-outlined text-[18px] text-primary shrink-0 mt-0.5">
-                      location_on
-                    </span>
-                    <span className="font-body-sm text-body-sm text-on-surface break-words">
-                      {place.display_name}
+                    <div className="flex items-start gap-2 min-w-0">
+                      <span className="material-symbols-outlined text-[18px] text-primary shrink-0 mt-0.5">
+                        location_on
+                      </span>
+                      <span className="font-body-sm text-body-sm text-on-surface break-words">
+                        {place.display_name}
+                      </span>
+                    </div>
+                    <span className="px-3 py-1 rounded-full bg-primary text-on-primary font-label-sm text-xs font-semibold shrink-0">
+                      Confirm
                     </span>
                   </button>
-                ))
-              )}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
         </div>
       )}
 
@@ -820,11 +1082,11 @@ export const NearbyPage: React.FC = () => {
 
         {/* Loading Badge over Map */}
         {loadingPlaces && (
-          <div className="absolute top-3 left-3 z-[400] px-3 py-1.5 rounded-full bg-surface-container-lowest/95 backdrop-blur-md shadow-md flex items-center gap-2 text-primary font-label-sm text-label-sm font-semibold">
-            <span className="material-symbols-outlined text-[16px] animate-spin">
+          <div className="absolute top-3 left-3 z-[400] px-3 py-1.5 rounded-full bg-surface-container-lowest/95 backdrop-blur-md shadow-md flex items-center gap-2 text-primary font-label-sm text-label-sm font-semibold max-w-[80%]">
+            <span className="material-symbols-outlined text-[16px] animate-spin shrink-0">
               progress_activity
             </span>
-            <span>Finding places...</span>
+            <span className="truncate">Searching near {searchingNearLabel}...</span>
           </div>
         )}
 
@@ -847,6 +1109,16 @@ export const NearbyPage: React.FC = () => {
             You (live)
           </span>
         </div>
+        {(locationMode === 'city' || locationMode === 'home') && (
+          <div className="inline-flex items-center gap-1.5">
+            <span className="w-5 h-5 rounded-full bg-[#005313] text-white inline-flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-[12px]">location_city</span>
+            </span>
+            <span className="font-label-sm text-label-sm text-on-surface font-semibold">
+              {cityLabel || 'Search center'}
+            </span>
+          </div>
+        )}
         {ALL_CATEGORIES.map((cat) => (
           <div key={cat.id} className="inline-flex items-center gap-1.5">
             <span
@@ -898,17 +1170,21 @@ export const NearbyPage: React.FC = () => {
       <section className="space-y-3 pt-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-headline-sm text-headline-sm text-primary font-bold">
-            Places near {cityLabel ? cityLabel : locationMode === 'home' ? 'your home area' : 'you'}
+            Places near {searchingNearLabel}
           </h2>
-          {!loadingPlaces && searchCenter && (
+          {loadingPlaces ? (
+            <span className="font-label-sm text-label-sm text-primary font-medium">
+              Searching near {searchingNearLabel}...
+            </span>
+          ) : searchCenter ? (
             <span className="font-label-sm text-label-sm text-on-surface-variant">
               {sortedPlaces.length} {sortedPlaces.length === 1 ? 'place' : 'places'} within {radiusKm} km
             </span>
-          )}
+          ) : null}
         </div>
 
-        {/* Loading Skeleton List */}
-        {loadingPlaces && (
+        {/* Loading Skeleton List (only when no cached places are already visible) */}
+        {loadingPlaces && sortedPlaces.length === 0 && (
           <div className="space-y-2.5">
             {[1, 2, 3, 4].map((n) => (
               <div
@@ -944,13 +1220,13 @@ export const NearbyPage: React.FC = () => {
               No places found, try a bigger radius
             </p>
             <div className="flex flex-wrap items-center justify-center gap-2">
-              {radiusKm < 50 && (
+              {radiusKm < MAX_NEARBY_RADIUS_KM && (
                 <button
                   type="button"
                   onClick={handleTryBiggerRadius}
                   className="px-4 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-bold"
                 >
-                  Try {RADIUS_OPTIONS.find((r) => r > radiusKm) || 50} km
+                  Try {RADIUS_OPTIONS.find((r) => r > radiusKm) || MAX_NEARBY_RADIUS_KM} km
                 </button>
               )}
               {selectedCategories.size < 4 && (
@@ -968,8 +1244,8 @@ export const NearbyPage: React.FC = () => {
           </div>
         )}
 
-        {/* Sorted Place Cards */}
-        {!loadingPlaces && !placesError && sortedPlaces.length > 0 && (
+        {/* Sorted Place Cards (shown immediately from cache even while refreshing/retrying) */}
+        {sortedPlaces.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {sortedPlaces.map((place) => {
               const meta = CATEGORY_CONFIG[place.category];
@@ -1067,6 +1343,186 @@ export const NearbyPage: React.FC = () => {
                 </article>
               );
             })}
+          </div>
+        )}
+      </section>
+
+      {/* Search the web for more places section */}
+      <section className="space-y-3 pt-2 border-t border-outline-variant/25">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="min-w-0">
+            <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold">
+              More Wildlife Places
+            </h2>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              Discover sanctuaries, parks, and rehabilitation centers from web results.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            disabled={webLoading || webRateLimited || webCooldownSec > 0}
+            onClick={() => handleSearchWebMorePlaces(false)}
+            className="px-4 min-h-[44px] rounded-full bg-secondary-container hover:opacity-95 text-on-secondary-container font-label-md text-label-md font-bold inline-flex items-center gap-2 shadow-xs transition-all active:scale-95 disabled:opacity-60 shrink-0"
+          >
+            <span
+              className={`material-symbols-outlined text-[18px] ${
+                webLoading ? 'animate-spin' : ''
+              }`}
+            >
+              {webLoading ? 'progress_activity' : 'travel_explore'}
+            </span>
+            <span>
+              {webLoading
+                ? 'Searching the web...'
+                : webCooldownSec > 0
+                ? `Wait ${webCooldownSec}s`
+                : 'Search the web for more places'}
+            </span>
+          </button>
+        </div>
+
+        {/* Web Search Loading State */}
+        {webLoading && (
+          <div className="p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20 flex items-center gap-2.5 text-primary font-label-md text-label-md font-semibold">
+            <span className="material-symbols-outlined text-[20px] animate-spin shrink-0">
+              progress_activity
+            </span>
+            <span>Searching the web...</span>
+          </div>
+        )}
+
+        {/* Web Search Error / 429 Daily Limit Notice */}
+        {!webLoading && webError && (
+          <div
+            className={`p-4 rounded-2xl border flex flex-wrap items-center justify-between gap-3 ${
+              webRateLimited
+                ? 'bg-surface-container-low border-outline-variant/40'
+                : 'bg-error-container/25 border-error/40'
+            }`}
+          >
+            <div className="flex items-start gap-2.5 min-w-0 flex-1">
+              <span
+                className={`material-symbols-outlined text-[20px] shrink-0 mt-0.5 ${
+                  webRateLimited ? 'text-secondary' : 'text-error'
+                }`}
+              >
+                {webRateLimited ? 'info' : 'error'}
+              </span>
+              <p
+                className={`font-body-sm text-body-sm ${
+                  webRateLimited ? 'text-on-surface font-medium' : 'text-error'
+                }`}
+              >
+                {webError}
+              </p>
+            </div>
+            {!webRateLimited && (
+              <button
+                type="button"
+                disabled={webCooldownSec > 0}
+                onClick={() => handleSearchWebMorePlaces(true)}
+                className="px-4 min-h-[42px] rounded-full bg-error text-on-error font-label-md text-label-md font-bold shrink-0 disabled:opacity-60"
+              >
+                {webCooldownSec > 0 ? `Retry (${webCooldownSec}s)` : 'Retry'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Web Search Results Cards + Sources */}
+        {!webLoading && webResult && (
+          <div className="space-y-3">
+            <p className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-1.5 px-1">
+              <span className="material-symbols-outlined text-[16px] text-secondary shrink-0">
+                public
+              </span>
+              <span>Found by web search. Check details before you go.</span>
+            </p>
+
+            {webResult.places.length === 0 ? (
+              <div className="p-5 rounded-2xl bg-surface-container-low border border-outline-variant/25 text-center">
+                <p className="font-body-md text-body-md text-on-surface-variant">
+                  No additional web places found for {webResult.city}.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {webResult.places.map((place, idx) => (
+                  <article
+                    key={`${place.name}-${idx}`}
+                    className="p-3.5 rounded-2xl bg-surface-container-low border border-outline-variant/25 shadow-xs flex flex-col justify-between gap-2.5 min-w-0"
+                  >
+                    <div className="space-y-1.5 min-w-0">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <h3 className="font-headline-sm text-headline-sm text-on-surface font-bold break-words">
+                          {place.name}
+                        </h3>
+                        {place.type && (
+                          <span className="px-2.5 py-0.5 rounded-full bg-secondary-container/70 text-on-secondary-container font-label-sm text-[11px] font-semibold shrink-0">
+                            {place.type}
+                          </span>
+                        )}
+                      </div>
+
+                      {place.whatYouCanSee && (
+                        <p className="font-body-sm text-body-sm text-on-surface-variant">
+                          <span className="font-semibold text-on-surface">What you can see: </span>
+                          {place.whatYouCanSee}
+                        </p>
+                      )}
+
+                      {place.distanceHint && (
+                        <p className="font-label-sm text-label-sm text-on-surface-variant flex items-center gap-1">
+                          <span className="material-symbols-outlined text-[15px] text-secondary shrink-0">
+                            distance
+                          </span>
+                          <span>{place.distanceHint}</span>
+                        </p>
+                      )}
+                    </div>
+
+                    {place.website && (
+                      <div className="pt-2 border-t border-outline-variant/20">
+                        <a
+                          href={place.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 font-label-sm text-label-sm text-primary font-semibold hover:underline"
+                        >
+                          <span className="material-symbols-outlined text-[16px] shrink-0">
+                            language
+                          </span>
+                          <span>Visit website</span>
+                        </a>
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {/* Sources links */}
+            {webResult.sources.length > 0 && (
+              <div className="pt-1 px-1 space-y-1">
+                <p className="font-label-sm text-[11px] font-semibold text-on-surface-variant">
+                  Sources:
+                </p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  {webResult.sources.map((source, idx) => (
+                    <a
+                      key={`${source.url}-${idx}`}
+                      href={source.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-label-sm text-[11px] text-primary hover:underline truncate max-w-[260px]"
+                    >
+                      {source.title}
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </section>

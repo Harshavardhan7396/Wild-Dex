@@ -11,6 +11,8 @@ export const SettingsPage: React.FC = () => {
   const [offlineDownloaded, setOfflineDownloaded] = useState(true);
   const [obfuscateGps, setObfuscateGps] = useState(true);
   const [publicProfile, setPublicProfile] = useState<boolean>(userProfile?.isPublic ?? true);
+  const [savingPublicProfile, setSavingPublicProfile] = useState(false);
+  const [publicProfileError, setPublicProfileError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [clearingPrefs, setClearingPrefs] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
@@ -244,33 +246,54 @@ export const SettingsPage: React.FC = () => {
         </div>
 
         {/* Public Profile */}
-        <div className="flex items-center justify-between gap-3 py-1 border-t border-outline-variant/20 pt-2">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
-              <span className="material-symbols-outlined text-[20px]">visibility</span>
+        <div className="flex flex-col gap-2 py-1 border-t border-outline-variant/20 pt-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="w-9 h-9 rounded-full bg-surface-container flex items-center justify-center text-on-surface-variant shrink-0">
+                <span className="material-symbols-outlined text-[20px]">visibility</span>
+              </div>
+              <div className="min-w-0">
+                <p className="font-label-md text-label-md font-semibold text-on-surface">
+                  Public Profile
+                </p>
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  Public profiles show your bio, counts, posts and collection to everyone signed in.
+                </p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <p className="font-label-md text-label-md font-semibold text-on-surface">Public Profile Visibility</p>
-              <p className="font-body-sm text-body-sm text-on-surface-variant">Allow other naturalists to discover you</p>
-            </div>
-          </div>
-          <button
-            onClick={async () => {
-              const next = !publicProfile;
-              setPublicProfile(next);
-              if (currentUser) {
+            <button
+              type="button"
+              disabled={savingPublicProfile}
+              aria-label="Toggle public profile"
+              onClick={async () => {
+                if (savingPublicProfile) return;
+                const previous = publicProfile;
+                const next = !previous;
+                setPublicProfile(next);
+                setPublicProfileError(null);
+                setSavingPublicProfile(true);
                 try {
-                  await updateUserProfile({ isPublic: next });
-                } catch (err) {
-                  console.warn('Could not update profile visibility:', err);
+                  if (currentUser) {
+                    await updateUserProfile({ isPublic: next });
+                  }
+                  showToast(next ? 'Profile is now public' : 'Profile set to private');
+                } catch (err: any) {
+                  setPublicProfile(previous);
+                  const msg = err?.message || 'Could not update profile visibility.';
+                  setPublicProfileError(msg);
+                  showToast(msg);
+                } finally {
+                  setSavingPublicProfile(false);
                 }
-              }
-              showToast(next ? 'Profile is now public' : 'Profile set to private');
-            }}
-            className={`w-12 h-7 rounded-full p-1 transition-colors shrink-0 ${publicProfile ? 'bg-primary' : 'bg-surface-container-high'}`}
-          >
-            <div className={`w-5 h-5 rounded-full bg-white transition-transform ${publicProfile ? 'translate-x-5' : 'translate-x-0'}`}></div>
-          </button>
+              }}
+              className={`w-12 h-7 rounded-full p-1 transition-colors shrink-0 disabled:opacity-60 ${publicProfile ? 'bg-primary' : 'bg-surface-container-high'}`}
+            >
+              <div className={`w-5 h-5 rounded-full bg-white transition-transform ${publicProfile ? 'translate-x-5' : 'translate-x-0'}`}></div>
+            </button>
+          </div>
+          {publicProfileError && (
+            <p className="font-body-sm text-xs text-error pl-12">{publicProfileError}</p>
+          )}
         </div>
       </div>
 

@@ -19,6 +19,7 @@ import { LeaderboardPage } from './pages/LeaderboardPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { NearbyPage } from './pages/NearbyPage';
 import { LoginPage } from './pages/LoginPage';
+import { PublicProfilePage } from './pages/PublicProfilePage';
 
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
@@ -158,6 +159,7 @@ function AppContent() {
           <Route path="/health" element={<HealthCheckerPage />} />
           <Route path="/collection" element={<CollectionPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/u/:username" element={<PublicProfilePage />} />
           <Route path="/feed" element={<FeedPage />} />
           <Route path="/invite" element={<InviteFriendsPage />} />
           <Route path="/shared-collection" element={<SharedCollectionPage />} />

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { FindPeopleBox } from '../components/common/FindPeopleBox';
 import { CollectionItem, getSupabaseUserCollection } from '../services/supabaseCollectionService';
 import {
   AlbumInviteResult,
@@ -945,6 +946,11 @@ export const FeedPage: React.FC = () => {
         </div>
       </section>
 
+      {/* Find People Search Box */}
+      <section className="px-3 sm:px-margin pb-2">
+        <FindPeopleBox />
+      </section>
+
       {/* Separate Invite & Joining Code Sections */}
       {invitePanelOpen && (
         <section className="px-3 sm:px-margin pb-2">
@@ -1137,24 +1143,30 @@ export const FeedPage: React.FC = () => {
         <section className="py-space-sm border-b border-outline-variant/20">
           <div className="flex items-center gap-3 overflow-x-auto px-3 sm:px-margin no-scrollbar py-1">
             {stories.map((story) => (
-              <button
+              <div
                 key={story.userId}
-                type="button"
-                onClick={() => setActiveStory(story)}
                 className="flex flex-col items-center gap-1 shrink-0 group"
               >
-                <div className="relative p-0.5 rounded-full ring-2 ring-primary ring-offset-2 ring-offset-surface">
+                <button
+                  type="button"
+                  onClick={() => setActiveStory(story)}
+                  aria-label={`View ${story.username}'s story`}
+                  className="relative p-0.5 rounded-full ring-2 ring-primary ring-offset-2 ring-offset-surface"
+                >
                   <AvatarBadge
                     avatarUrl={story.avatarUrl}
                     name={story.displayName}
                     sizeClass="w-13 h-13"
                     textClass="text-base"
                   />
-                </div>
-                <span className="font-label-sm text-[11px] text-on-surface truncate max-w-[68px]">
+                </button>
+                <Link
+                  to={`/u/${encodeURIComponent(story.username)}`}
+                  className="font-label-sm text-[11px] text-on-surface hover:text-primary truncate max-w-[68px] transition-colors"
+                >
                   {story.username}
-                </span>
-              </button>
+                </Link>
+              </div>
             ))}
           </div>
         </section>
@@ -1313,17 +1325,25 @@ export const FeedPage: React.FC = () => {
                 {/* Author Header */}
                 <div className="flex items-start sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                    <AvatarBadge
-                      avatarUrl={post.author.avatarUrl}
-                      name={post.author.displayName}
-                      sizeClass="w-10 h-10"
-                      textClass="text-sm"
-                    />
+                    <Link
+                      to={`/u/${encodeURIComponent(post.author.username)}`}
+                      className="shrink-0"
+                    >
+                      <AvatarBadge
+                        avatarUrl={post.author.avatarUrl}
+                        name={post.author.displayName}
+                        sizeClass="w-10 h-10"
+                        textClass="text-sm"
+                      />
+                    </Link>
                     <div className="flex flex-col min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-headline-sm text-headline-sm text-on-surface font-semibold leading-snug truncate">
+                        <Link
+                          to={`/u/${encodeURIComponent(post.author.username)}`}
+                          className="font-headline-sm text-headline-sm text-on-surface hover:text-primary font-semibold leading-snug truncate transition-colors"
+                        >
                           {post.author.username}
-                        </span>
+                        </Link>
                         {post.visibility === 'followers' && (
                           <span className="px-2 py-0.5 rounded-full bg-surface-container text-on-surface-variant text-[10px] font-semibold">
                             Followers only
@@ -1516,17 +1536,25 @@ export const FeedPage: React.FC = () => {
                               key={comment.id}
                               className="flex items-start gap-2 p-2.5 rounded-xl bg-surface-container"
                             >
-                              <AvatarBadge
-                                avatarUrl={comment.author.avatarUrl}
-                                name={comment.author.displayName}
-                                sizeClass="w-7 h-7"
-                                textClass="text-xs"
-                              />
+                              <Link
+                                to={`/u/${encodeURIComponent(comment.author.username)}`}
+                                className="shrink-0"
+                              >
+                                <AvatarBadge
+                                  avatarUrl={comment.author.avatarUrl}
+                                  name={comment.author.displayName}
+                                  sizeClass="w-7 h-7"
+                                  textClass="text-xs"
+                                />
+                              </Link>
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="font-label-md text-label-md font-semibold text-on-surface truncate">
+                                  <Link
+                                    to={`/u/${encodeURIComponent(comment.author.username)}`}
+                                    className="font-label-md text-label-md font-semibold text-on-surface hover:text-primary truncate transition-colors"
+                                  >
                                     {comment.author.username}
-                                  </span>
+                                  </Link>
                                   <div className="flex items-center gap-1.5 shrink-0">
                                     <span className="font-label-sm text-[11px] text-on-surface-variant">
                                       {formatRelativeTime(comment.createdAt)}
@@ -1956,14 +1984,18 @@ export const FeedPage: React.FC = () => {
         >
           <div className="w-full max-w-md rounded-2xl bg-surface overflow-hidden shadow-2xl border border-outline-variant/25 flex flex-col">
             <div className="p-3.5 flex items-center justify-between gap-2 border-b border-outline-variant/20">
-              <div className="flex items-center gap-2.5 min-w-0">
+              <Link
+                to={`/u/${encodeURIComponent(activeStory.username)}`}
+                onClick={() => setActiveStory(null)}
+                className="flex items-center gap-2.5 min-w-0 group"
+              >
                 <AvatarBadge
                   avatarUrl={activeStory.avatarUrl}
                   name={activeStory.displayName}
                   sizeClass="w-9 h-9"
                 />
                 <div className="min-w-0">
-                  <p className="font-label-md font-bold text-on-surface truncate">
+                  <p className="font-label-md font-bold text-on-surface group-hover:text-primary truncate transition-colors">
                     {activeStory.username}
                   </p>
                   <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
@@ -1973,7 +2005,7 @@ export const FeedPage: React.FC = () => {
                     {formatRelativeTime(activeStory.latestCreatedAt)}
                   </p>
                 </div>
-              </div>
+              </Link>
               <button
                 type="button"
                 onClick={() => setActiveStory(null)}
