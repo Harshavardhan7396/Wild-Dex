@@ -1,4 +1,4 @@
-import { Species, ObservationLog, SpeciesHealthInfo } from '../types/species';
+import { Species } from '../types/species';
 import { formatConservationStatus } from '../utils/formatters';
 
 // Cache key for local storage
@@ -437,29 +437,6 @@ export const CURATED_SPECIES: Species[] = [
   },
 ];
 
-export const MOCK_FEED_OBSERVATIONS: ObservationLog[] = [
-  {
-    id: 'obs-1',
-    speciesId: 'bengal-tiger',
-    speciesName: 'Bengal Tiger',
-    scientificName: 'Panthera tigris tigris • Carnivora',
-    photoUrl:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuBNC2KVDG8klLiKhZgH3c4aUWsUv6OFTPdF8KVnHhMl3-qE5NeqmdHCbCivAgZM3T4asa5IXmND8sA1QmqAj_lKfoxPbenLVOONaaTfPSibk_zEec_c4ZXS8yAqQCr-bgVqNodHhkX8acMyE-4Xvpc0VxiWzpe2iczjQPx_d100oxI1vUDCWkjs7k5gFmMJwY4yBbaIwixn1AlVo649pIl6VktNdYDoGiqlQbo7bF_-oBXn5c_3-Y4_gg',
-    userName: 'Dr. Aris Thorne',
-    userAvatar:
-      'https://lh3.googleusercontent.com/aida-public/AB6AXuCfi7ATaUUUMifGW_IBBdgTUVooFWb95RGI7l4XwiKguIterMV-rtNjviJ-2jTCxFc41waHiBzUYwRUxWDfAkusYhd54S54kY096pBhPEEYsTlKIoX4K50UlIIz5Re_XGg2N7VNyIpuKtGzkjGVIJS9fpGqhU4OcxWt93k16vvxPcIGSBJAOEwH14VJG4t9hVtCoJaB5szhu4LKrQSEwUHPDEGLUufZjSGUc2FMK07IkCkfNenCMKBuvQ',
-    locationName: 'Ranthambore National Park • 2h ago',
-    timeAgo: '2h ago',
-    aiMatchScore: 99.2,
-    caption:
-      '"Female tiger resting in morning mist near lake sector 3. Prime health with clean coat markings."',
-    claps: 58,
-    commentsCount: 9,
-    isWishlisted: true,
-    tags: ['Verified Specimen', 'Apex Predator'],
-  },
-];
-
 /**
  * Deterministic Species of the Day calculation
  */
@@ -468,6 +445,104 @@ export function getSpeciesOfTheDay(): Species {
   const dateSeed = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
   const index = Math.abs(dateSeed) % CURATED_SPECIES.length;
   return CURATED_SPECIES[index] || CURATED_SPECIES[0];
+}
+
+export type IconicTaxonGroup =
+  | 'Mammalia'
+  | 'Aves'
+  | 'Reptilia'
+  | 'Insecta'
+  | 'Plantae'
+  | 'Fungi';
+
+export interface ExploreSearchResult extends Species {
+  observationsCount?: number;
+  iconicTaxonName?: string;
+  matchedTerm?: string;
+}
+
+const CONSERVATION_STATUS_MAP: Record<string, 'LC' | 'NT' | 'VU' | 'EN' | 'CR'> = {
+  'LEAST CONCERN': 'LC',
+  'NEAR THREATENED': 'NT',
+  'VULNERABLE': 'VU',
+  'ENDANGERED': 'EN',
+  'CRITICALLY ENDANGERED': 'CR',
+};
+
+function mapINatTaxonToSpecies(item: any): ExploreSearchResult {
+  const defaultPhoto =
+    item.default_photo?.medium_url ||
+    item.default_photo?.square_url ||
+    item.default_photo?.url ||
+    '';
+
+  const taxonPhotos: string[] = Array.isArray(item.taxon_photos)
+    ? item.taxon_photos
+        .map((tp: any) => tp?.photo?.medium_url || tp?.photo?.large_url || tp?.photo?.url)
+        .filter(Boolean)
+    : [];
+
+  const galleryUrls = Array.from(
+    new Set([defaultPhoto, ...taxonPhotos].filter(Boolean))
+  ).slice(0, 8);
+
+  const rawStatus = item.conservation_status?.status_name?.toUpperCase() || '';
+  const mappedStatus = CONSERVATION_STATUS_MAP[rawStatus] || 'LC';
+
+  const ancestors: any[] = Array.isArray(item.ancestors) ? item.ancestors : [];
+  const findRank = (rank: string): string | undefined =>
+    ancestors.find((a) => a?.rank === rank)?.name;
+
+  const scientificName: string = item.name || 'Unknown species';
+  const commonName: string =
+    item.preferred_common_name ||
+    item.english_common_name ||
+    scientificName;
+
+  const obsCount =
+    typeof item.observations_count === 'number' ? item.observations_count : undefined;
+
+  return {
+    id: `inat-${item.id}`,
+    commonName,
+    scientificName,
+    taxonomy: {
+      kingdom: findRank('kingdom'),
+      phylum: findRank('phylum'),
+      class: findRank('class'),
+      order: findRank('order'),
+      family: findRank('family'),
+      genus: findRank('genus') || scientificName.split(' ')[0],
+      species: item.rank === 'species' ? scientificName : undefined,
+    },
+    category: mapIconicTaxonToCategory(item.iconic_taxon_name),
+    conservationStatus: mappedStatus,
+    statusLabel: formatConservationStatus(
+      item.conservation_status?.status_name || mappedStatus
+    ),
+    rarity:
+      mappedStatus === 'CR' || mappedStatus === 'EN'
+        ? 'Very Rare'
+        : mappedStatus === 'VU'
+        ? 'Rare'
+        : 'Common',
+    nativeRegion:
+      obsCount && obsCount > 1000 ? 'Widespread Range' : 'Regional Sightings',
+    habitat: item.iconic_taxon_name || 'Wild Habitat',
+    biomes: item.iconic_taxon_name ? [item.iconic_taxon_name] : [],
+    description:
+      item.wikipedia_summary ||
+      (obsCount !== undefined
+        ? `Recorded ${obsCount.toLocaleString()} times by naturalists on iNaturalist.`
+        : 'Documented in the iNaturalist global biodiversity database.'),
+    source: 'iNaturalist',
+    photoUrl: defaultPhoto,
+    photoCredit: item.default_photo?.attribution || 'iNaturalist Community',
+    galleryUrls,
+    observationsCount: obsCount,
+    iconicTaxonName: item.iconic_taxon_name || undefined,
+    matchedTerm: item.matched_term || undefined,
+  };
 }
 
 /**
@@ -493,59 +568,9 @@ async function fetchGBIFTaxon(scientificName: string): Promise<Partial<Species> 
         species: data.species,
       },
     };
-  } catch {
+  } catch (err) {
+    console.error('GBIF lookup failed:', err);
     return null;
-  }
-}
-
-/**
- * Fetch real taxa from iNaturalist API
- */
-async function searchINaturalist(query: string): Promise<Species[]> {
-  try {
-    const url = `https://api.inaturalist.org/v1/taxa?q=${encodeURIComponent(query)}&per_page=8`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    if (!data.results) return [];
-
-    return data.results.map((item: any): Species => {
-      const defaultPhoto = item.default_photo?.medium_url || item.default_photo?.url || '';
-      const status = item.conservation_status?.status_name?.toUpperCase() || 'LC';
-      const statusMap: Record<string, 'LC' | 'NT' | 'VU' | 'EN' | 'CR'> = {
-        'LEAST CONCERN': 'LC',
-        'NEAR THREATENED': 'NT',
-        'VULNERABLE': 'VU',
-        'ENDANGERED': 'EN',
-        'CRITICALLY ENDANGERED': 'CR',
-      };
-
-      return {
-        id: `inat-${item.id}`,
-        commonName: item.preferred_common_name || item.name,
-        scientificName: item.name,
-        taxonomy: {
-          genus: item.name.split(' ')[0],
-        },
-        category: mapIconicTaxonToCategory(item.iconic_taxon_name),
-        conservationStatus: statusMap[status] || 'LC',
-        statusLabel: formatConservationStatus(item.conservation_status?.status_name || statusMap[status] || 'LC'),
-        rarity: status === 'ENDANGERED' ? 'Very Rare' : 'Common',
-        nativeRegion: item.observations_count > 1000 ? 'Global / Widespread' : 'Regional Field',
-        habitat: 'Natural Biome',
-        biomes: ['Field Observation Site', 'Protected Reserve'],
-        description:
-          item.wikipedia_summary ||
-          `Recorded ${item.observations_count?.toLocaleString() || 1} times by naturalists worldwide on iNaturalist.`,
-        source: 'iNaturalist',
-        photoUrl: defaultPhoto || CURATED_SPECIES[0].photoUrl,
-        photoCredit: item.default_photo?.attribution || 'iNaturalist Naturalist Network',
-        galleryUrls: defaultPhoto ? [defaultPhoto] : [],
-        coordinates: { latitude: 20.0, longitude: 0.0 },
-      };
-    });
-  } catch {
-    return [];
   }
 }
 
@@ -570,7 +595,8 @@ async function fetchWikipediaSummary(title: string): Promise<Partial<Species> | 
       galleryUrls: photo ? [photo] : [],
       photoCredit: 'Wikimedia Commons Contributors',
     };
-  } catch {
+  } catch (err) {
+    console.error('Wikipedia summary lookup failed:', err);
     return null;
   }
 }
@@ -589,116 +615,157 @@ function mapIconicTaxonToCategory(taxon?: string): Species['category'] {
   return 'mammals';
 }
 
-/**
- * Get single species by ID (checks cache, then curated list, then queries real APIs)
- */
-export async function getSpeciesById(id: string): Promise<Species | null> {
-  const cleanId = id.trim().toLowerCase();
+function rankSearchResults(results: ExploreSearchResult[], query: string): ExploreSearchResult[] {
+  const qLower = query.trim().toLowerCase();
+  if (!qLower) return results;
 
-  // 1. Check local cache
-  const cached = getCachedSpecies(cleanId);
-  if (cached) return cached;
+  const getTier = (item: ExploreSearchResult): number => {
+    const common = item.commonName.toLowerCase().trim();
+    const sci = item.scientificName.toLowerCase().trim();
+    const matched = (item.matchedTerm || '').toLowerCase().trim();
 
-  // 2. Check curated collection
-  const found = CURATED_SPECIES.find(
-    (s) =>
-      s.id === cleanId ||
-      s.scientificName.toLowerCase() === cleanId ||
-      s.commonName.toLowerCase() === cleanId
-  );
-  if (found) {
-    saveSpeciesToCache(found);
-    return found;
-  }
+    if (common === qLower) return 0;
+    if (sci === qLower) return 1;
+    if (common.startsWith(qLower)) return 2;
+    if (matched === qLower) return 3;
+    if (common.includes(qLower) || sci.startsWith(qLower)) return 4;
+    if (sci.includes(qLower) || matched.includes(qLower)) return 5;
+    return 6;
+  };
 
-  // 3. Query real iNaturalist API
-  try {
-    const iNatResults = await searchINaturalist(cleanId);
-    if (iNatResults && iNatResults.length > 0) {
-      let candidate = iNatResults[0];
-
-      // Enrich with Wikipedia description & high-res image
-      const wiki = await fetchWikipediaSummary(candidate.commonName || candidate.scientificName);
-      if (wiki) {
-        candidate = {
-          ...candidate,
-          description: wiki.description || candidate.description,
-          photoUrl: wiki.photoUrl || candidate.photoUrl,
-          galleryUrls: wiki.galleryUrls?.length ? wiki.galleryUrls : candidate.galleryUrls,
-        };
-      }
-
-      // Enrich with GBIF hierarchy
-      const gbif = await fetchGBIFTaxon(candidate.scientificName);
-      if (gbif && gbif.taxonomy) {
-        candidate = {
-          ...candidate,
-          taxonomy: {
-            ...candidate.taxonomy,
-            ...gbif.taxonomy,
-          },
-        };
-      }
-
-      saveSpeciesToCache(candidate);
-      return candidate;
-    }
-  } catch (err) {
-    console.warn('Real API lookup error:', err);
-  }
-
-  // Fallback to first species
-  return CURATED_SPECIES[0];
+  return [...results]
+    .map((item, idx) => ({ item, idx, tier: getTier(item) }))
+    .sort((a, b) => {
+      if (a.tier !== b.tier) return a.tier - b.tier;
+      const obsA = a.item.observationsCount ?? 0;
+      const obsB = b.item.observationsCount ?? 0;
+      if (obsB !== obsA) return obsB - obsA;
+      return a.idx - b.idx;
+    })
+    .map((entry) => entry.item);
 }
 
 /**
- * Search species across local curated database and remote iNaturalist API
+ * Search real taxa from iNaturalist Autocomplete API.
+ * Does not search hardcoded/mock species lists.
  */
 export async function searchSpecies(
   query: string,
-  categoryFilter?: string,
-  statusFilter?: string
-): Promise<Species[]> {
-  const q = query.trim().toLowerCase();
+  iconicTaxon?: IconicTaxonGroup | null,
+  signal?: AbortSignal
+): Promise<ExploreSearchResult[]> {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) return [];
 
-  // Local filtering first
-  let localResults = CURATED_SPECIES.filter((s) => {
-    const matchQuery =
-      !q ||
-      s.commonName.toLowerCase().includes(q) ||
-      s.scientificName.toLowerCase().includes(q) ||
-      s.habitat.toLowerCase().includes(q) ||
-      s.biomes.some((b) => b.toLowerCase().includes(q)) ||
-      s.category.toLowerCase().includes(q);
-
-    const matchCategory =
-      !categoryFilter || categoryFilter === 'all' || s.category === categoryFilter;
-
-    const matchStatus =
-      !statusFilter ||
-      statusFilter === 'all' ||
-      (statusFilter === 'at-risk' && ['VU', 'EN', 'CR'].includes(s.conservationStatus));
-
-    return matchQuery && matchCategory && matchStatus;
-  });
-
-  // If query is long enough and not enough local results, query real iNaturalist API
-  if (q.length >= 2) {
-    try {
-      const remoteResults = await searchINaturalist(q);
-      const combined = [...localResults];
-      for (const rem of remoteResults) {
-        if (!combined.some((c) => c.scientificName.toLowerCase() === rem.scientificName.toLowerCase())) {
-          combined.push(rem);
-        }
-      }
-      return combined;
-    } catch {
-      return localResults;
-    }
+  let url = `https://api.inaturalist.org/v1/taxa/autocomplete?q=${encodeURIComponent(
+    trimmed
+  )}&per_page=20&locale=en`;
+  if (iconicTaxon) {
+    url += `&iconic_taxa=${encodeURIComponent(iconicTaxon)}`;
   }
 
-  return localResults;
+  try {
+    const res = await fetch(url, { signal });
+    if (!res.ok) {
+      throw new Error(`Species search failed (${res.status}). Please try again.`);
+    }
+    const data = await res.json();
+    const rawResults = Array.isArray(data?.results) ? data.results : [];
+    const mapped = rawResults.map(mapINatTaxonToSpecies);
+    return rankSearchResults(mapped, trimmed);
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      throw err;
+    }
+    console.error('iNaturalist autocomplete search failed:', err);
+    throw err instanceof Error ? err : new Error('Failed to search species.');
+  }
+}
+
+/**
+ * Get single species by ID (handles inat-{id}, cache, legacy curated id, or iNaturalist lookup)
+ */
+export async function getSpeciesById(id: string): Promise<Species | null> {
+  const cleanId = id.trim();
+  const lowerId = cleanId.toLowerCase();
+
+  // 1. Check local cache (only use directly if taxonomy kingdom is already enriched or curated)
+  const cached = getCachedSpecies(lowerId);
+  if (cached && (cached.taxonomy?.kingdom || cached.source !== 'iNaturalist')) {
+    return cached;
+  }
+
+  // 2. Legacy curated ID match (for curated detail routes like /species/siberian-tiger)
+  const curatedMatch = CURATED_SPECIES.find((s) => s.id === lowerId);
+  if (curatedMatch) {
+    saveSpeciesToCache(curatedMatch);
+    return curatedMatch;
+  }
+
+  // 3. Real iNaturalist API lookup
+  try {
+    const inatMatch = lowerId.match(/^inat-(\d+)$/);
+    let candidate: Species | null = null;
+
+    if (inatMatch) {
+      const taxonId = inatMatch[1];
+      const res = await fetch(
+        `https://api.inaturalist.org/v1/taxa/${encodeURIComponent(taxonId)}?locale=en`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        const taxon = data?.results?.[0];
+        if (taxon) {
+          candidate = mapINatTaxonToSpecies(taxon);
+        }
+      }
+    } else {
+      const searchResults = await searchSpecies(cleanId);
+      if (searchResults.length > 0) {
+        candidate = searchResults[0];
+      }
+    }
+
+    if (!candidate && cached) {
+      return cached;
+    }
+    if (!candidate) {
+      return null;
+    }
+
+    // Enrich with Wikipedia summary & GBIF hierarchy if needed
+    const [wiki, gbif] = await Promise.all([
+      fetchWikipediaSummary(candidate.scientificName || candidate.commonName),
+      !candidate.taxonomy?.kingdom ? fetchGBIFTaxon(candidate.scientificName) : Promise.resolve(null),
+    ]);
+
+    if (wiki) {
+      candidate = {
+        ...candidate,
+        description: wiki.description || candidate.description,
+        photoUrl: candidate.photoUrl || wiki.photoUrl || '',
+        galleryUrls: candidate.galleryUrls.length
+          ? candidate.galleryUrls
+          : wiki.galleryUrls || [],
+      };
+    }
+
+    if (gbif && gbif.taxonomy) {
+      candidate = {
+        ...candidate,
+        taxonomy: {
+          ...gbif.taxonomy,
+          ...candidate.taxonomy,
+        },
+      };
+    }
+
+    saveSpeciesToCache(candidate);
+    return candidate;
+  } catch (err) {
+    console.error('Failed to load species details:', err);
+    return cached || null;
+  }
 }
 
 /**
@@ -708,12 +775,16 @@ export function getCachedSpecies(id: string): Species | null {
   try {
     const raw = localStorage.getItem(`${SPECIES_CACHE_KEY}_${id}`);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch (err) {
+    console.error('Failed to read species cache:', err);
+  }
   return null;
 }
 
 export function saveSpeciesToCache(species: Species): void {
   try {
     localStorage.setItem(`${SPECIES_CACHE_KEY}_${species.id}`, JSON.stringify(species));
-  } catch {}
+  } catch (err) {
+    console.error('Failed to save species cache:', err);
+  }
 }

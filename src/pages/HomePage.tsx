@@ -341,7 +341,7 @@ export const HomePage: React.FC = () => {
           </div>
           <input
             className="w-full h-12 pl-11 pr-14 rounded-full bg-surface-container text-on-surface placeholder:text-on-surface-variant/70 font-body-md text-body-md shadow-sm focus:outline-none focus:bg-surface-container-lowest transition-all"
-            placeholder="Search real species, habitats, fungi..."
+            placeholder="Search animals, plants, fungi..."
             type="search"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}

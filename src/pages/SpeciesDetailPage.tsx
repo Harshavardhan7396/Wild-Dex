@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getSpeciesById, CURATED_SPECIES } from '../services/speciesService';
+import { getSpeciesById } from '../services/speciesService';
 import { Species } from '../types/species';
 import { SpeciesRangeMap } from '../components/species/SpeciesRangeMap';
 import { InfoTooltip } from '../components/common/InfoTooltip';
@@ -11,6 +11,8 @@ export const SpeciesDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const [species, setSpecies] = useState<Species | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
   const [activeTab, setActiveTab] = useState<'overview' | 'habitat' | 'diet' | 'lifecycle' | 'logs'>('overview');
   const [isBookmarked, setIsBookmarked] = useState(false);
   const [isCollected, setIsCollected] = useState(false);
@@ -27,12 +29,36 @@ export const SpeciesDetailPage: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
     setLoading(true);
+    setError(null);
+    setSelectedPhotoIdx(0);
 
     const loadData = async () => {
-      const data = await getSpeciesById(id || 'bengal-tiger');
-      if (isMounted) {
-        setSpecies(data || CURATED_SPECIES[0]);
-        setLoading(false);
+      try {
+        if (!id) {
+          if (isMounted) {
+            setSpecies(null);
+            setError('Species not found.');
+            setLoading(false);
+          }
+          return;
+        }
+        const data = await getSpeciesById(id);
+        if (isMounted) {
+          if (!data) {
+            setSpecies(null);
+            setError('We could not find details for this species.');
+          } else {
+            setSpecies(data);
+          }
+          setLoading(false);
+        }
+      } catch (err: any) {
+        console.error('Error loading species detail:', err);
+        if (isMounted) {
+          setSpecies(null);
+          setError(err?.message || 'Failed to load species details.');
+          setLoading(false);
+        }
       }
     };
 
@@ -41,18 +67,53 @@ export const SpeciesDetailPage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [id]);
+  }, [id, retryTick]);
 
-  if (loading || !species) {
+  if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
         <span className="material-symbols-outlined text-[36px] text-primary animate-spin">progress_activity</span>
-        <p className="font-label-md text-label-md text-on-surface-variant">Loading Family Tree dossier...</p>
+        <p className="font-label-md text-label-md text-on-surface-variant">Loading species details...</p>
       </div>
     );
   }
 
-  const galleryList = [species.photoUrl, ...(species.galleryUrls || [])];
+  if (error || !species) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 px-4 text-center">
+        <div className="w-14 h-14 rounded-full bg-error-container text-on-error-container flex items-center justify-center">
+          <span className="material-symbols-outlined text-[28px]">error</span>
+        </div>
+        <div className="space-y-1 max-w-md">
+          <h1 className="font-headline-sm text-headline-sm text-on-surface font-bold">
+            Species not available
+          </h1>
+          <p className="font-body-md text-body-md text-on-surface-variant">
+            {error || 'We could not load this species right now.'}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <button
+            type="button"
+            onClick={() => setRetryTick((t) => t + 1)}
+            className="px-5 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-bold"
+          >
+            Retry
+          </button>
+          <Link
+            to="/explore"
+            className="px-5 min-h-[44px] rounded-full bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold inline-flex items-center"
+          >
+            Back to Explore
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const galleryList = Array.from(
+    new Set([species.photoUrl, ...(species.galleryUrls || [])].filter(Boolean))
+  );
 
   const handleRoarAudio = () => {
     setAudioPlaying(true);
@@ -77,12 +138,19 @@ export const SpeciesDetailPage: React.FC = () => {
         <div className="lg:col-span-5 flex flex-col gap-4 lg:sticky lg:top-24">
           {/* 1. Hero Visual Carousel with Tactile Floating Overlays */}
           <div className="relative w-full overflow-hidden bg-surface-container-high rounded-none lg:rounded-3xl aspect-[4/3] max-h-[380px] lg:max-h-[440px] shadow-sm">
-            <img
-              alt={species.commonName}
-              className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-500"
-              src={galleryList[selectedPhotoIdx] || species.photoUrl}
-              onClick={() => setGalleryOpen(true)}
-            />
+            {galleryList[selectedPhotoIdx] || species.photoUrl ? (
+              <img
+                alt={species.commonName}
+                className="w-full h-full object-cover cursor-pointer hover:scale-105 transition-transform duration-500"
+                src={galleryList[selectedPhotoIdx] || species.photoUrl}
+                onClick={() => setGalleryOpen(true)}
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-on-surface-variant gap-2">
+                <span className="material-symbols-outlined text-[48px] opacity-60">pets</span>
+                <span className="font-label-sm text-label-sm">No photo available</span>
+              </div>
+            )}
             {/* Scrims */}
             <div className="absolute inset-0 bg-gradient-to-t from-surface/80 via-transparent to-black/40 pointer-events-none"></div>
 
