@@ -97,11 +97,6 @@ function setLocalNotInterestedIds(userId: string, ids: number[]): void {
   } catch {}
 }
 
-function parseNotInterestedIds(raw: unknown): number[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
-}
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -149,7 +144,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const [profileRes, privateData] = await Promise.all([
         supabase
           .from('profiles')
-          .select('id, username, display_name, avatar_url, bio, is_public, not_interested_taxa, created_at')
+          .select('id, username, display_name, avatar_url, bio, is_public, created_at')
           .eq('id', authUser.id)
           .maybeSingle(),
         fetchMyUserPrivate(),
@@ -178,10 +173,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (data) {
         const resolvedName = data.display_name || authUser.displayName;
         const resolvedPhoto = data.avatar_url || authUser.photoURL;
-        const remoteDismissed = parseNotInterestedIds(data.not_interested_taxa);
         const localDismissed = getLocalNotInterestedIds(authUser.id);
-        const mergedDismissed = Array.from(new Set([...remoteDismissed, ...localDismissed]));
-        setLocalNotInterestedIds(authUser.id, mergedDismissed);
 
         setCurrentUser((prev) =>
           prev
@@ -206,7 +198,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           homeLat,
           homeLng,
           homeLabel,
-          notInterestedIds: mergedDismissed,
+          notInterestedIds: localDismissed,
           experienceLevel: 'enthusiast',
           favoriteTaxa: interests.length > 0 ? interests.join(', ') : 'All Kingdoms',
           bio: data.bio || 'Exploring biodiversity with WildDex.',
@@ -214,7 +206,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: data.created_at,
           updatedAt: data.created_at,
         });
-      } else {
+      } else if (!error) {
         const localDismissed = getLocalNotInterestedIds(authUser.id);
         // Upsert initial public profile if trigger has not executed yet
         const initialProfile: UserProfile = {
@@ -524,35 +516,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const persistNotInterestedList = async (nextIds: number[]) => {
     const storageUserId = currentUser?.id || 'guest';
     setLocalNotInterestedIds(storageUserId, nextIds);
-
-    if (!currentUser || !isSupabaseConfigured) {
-      return;
-    }
-
-    try {
-      const { data: userRes, error: authErr } = await supabase.auth.getUser();
-      if (authErr || !userRes?.user) return;
-
-      const { error } = await supabase
-        .from('profiles')
-        .update({ not_interested_taxa: nextIds })
-        .eq('id', userRes.user.id);
-
-      if (error) {
-        if (
-          error.code === 'PGRST204' ||
-          error.code === '42703' ||
-          error.message?.toLowerCase().includes('not_interested_taxa')
-        ) {
-          console.warn('profiles.not_interested_taxa column not present yet; kept locally per user.');
-          return;
-        }
-        throw new Error(error.message || 'Could not save preference.');
-      }
-    } catch (err) {
-      console.error('Error saving not_interested_taxa:', err);
-      throw err;
-    }
   };
 
   const dismissSpeciesInterest = async (taxonId: number) => {
