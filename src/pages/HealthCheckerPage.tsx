@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { InfoTooltip } from '../components/common/InfoTooltip';
 import {
   HealthSpeciesPickerModal,
@@ -10,13 +10,16 @@ import { getSymptomsForType } from '../data/symptoms';
 import {
   HealthResultSection,
   DetailedHealthResult,
-  SeriousnessLevel,
-  LikelihoodWord,
-  MainPossibility,
-  OtherPossibility,
-  FoodHelpItem,
-  FoodAvoidItem,
 } from '../components/health/HealthResultSection';
+import { parseHealthResponse } from '../utils/healthResultParser';
+import { useAuth } from '../contexts/AuthContext';
+import {
+  CARE_KIND_META,
+  CareSubject,
+  careKindToHealthCategory,
+  listCareSubjects,
+} from '../services/careService';
+import { SaveHealthToCareModal } from '../components/care/SaveHealthToCareModal';
 
 import { supabase } from '../lib/supabase';
 
@@ -36,270 +39,6 @@ const HEALTH_LOADING_STEPS = [
   'Looking for possible causes...',
   'Finding foods that help...',
 ] as const;
-
-function toCleanString(raw: unknown): string | undefined {
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    return trimmed || undefined;
-  }
-  if (Array.isArray(raw)) {
-    const joined = raw
-      .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
-      .map((v) => v.trim())
-      .join(' ');
-    return joined || undefined;
-  }
-  return undefined;
-}
-
-function normalizeSeriousness(raw: unknown, emergencyFlag: boolean): SeriousnessLevel | undefined {
-  if (typeof raw === 'string' && raw.trim()) {
-    const lower = raw.trim().toLowerCase();
-    if (
-      lower.includes('high') ||
-      lower.includes('urgent') ||
-      lower.includes('critical') ||
-      lower.includes('severe') ||
-      lower.includes('emergency')
-    ) {
-      return 'High';
-    }
-    if (lower.includes('medium') || lower.includes('moderate')) {
-      return 'Medium';
-    }
-    if (lower.includes('low') || lower.includes('mild')) {
-      return 'Low';
-    }
-  }
-  if (emergencyFlag) return 'High';
-  return undefined;
-}
-
-function normalizeLikelihood(raw: unknown): LikelihoodWord | undefined {
-  if (typeof raw === 'number' && !Number.isNaN(raw)) {
-    if (raw <= 1) {
-      if (raw >= 0.7) return 'Likely';
-      if (raw >= 0.35) return 'Possible';
-      return 'Unlikely';
-    }
-    if (raw >= 70) return 'Likely';
-    if (raw >= 35) return 'Possible';
-    return 'Unlikely';
-  }
-  if (typeof raw === 'string' && raw.trim()) {
-    const lower = raw.trim().toLowerCase();
-    const numMatch = lower.match(/\d+/);
-    if (lower.includes('%') && numMatch) {
-      const pct = Number(numMatch[0]);
-      if (pct >= 70) return 'Likely';
-      if (pct >= 35) return 'Possible';
-      return 'Unlikely';
-    }
-    if (lower.includes('unlikely') || lower.includes('low') || lower.includes('rare')) {
-      return 'Unlikely';
-    }
-    if (lower.includes('likely') || lower.includes('high') || lower.includes('probable') || lower.includes('very')) {
-      return 'Likely';
-    }
-    if (lower.includes('possible') || lower.includes('moderate') || lower.includes('medium') || lower.includes('maybe')) {
-      return 'Possible';
-    }
-    return 'Possible';
-  }
-  return undefined;
-}
-
-function toStringList(raw: unknown): string[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item) => {
-        if (typeof item === 'string') return item.trim();
-        if (item && typeof item === 'object') {
-          const obj = item as Record<string, unknown>;
-          const head = [obj.title, obj.name, obj.step, obj.action, obj.label, obj.question]
-            .find((v) => typeof v === 'string' && v.trim());
-          const body = [obj.description, obj.text, obj.detail, obj.details, obj.note, obj.notes]
-            .find((v) => typeof v === 'string' && v.trim());
-          if (typeof head === 'string' && typeof body === 'string') {
-            return `${head.trim()}: ${body.trim()}`;
-          }
-          if (typeof head === 'string') return head.trim();
-          if (typeof body === 'string') return body.trim();
-        }
-        return '';
-      })
-      .filter(Boolean);
-  }
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (!trimmed) return [];
-    const lines = trimmed
-      .split(/\r?\n/)
-      .map((line) => line.replace(/^[-•*\d.)\s]+/, '').trim())
-      .filter(Boolean);
-    return lines.length > 0 ? lines : [trimmed];
-  }
-  return [];
-}
-
-function parseMainPossibility(raw: unknown): MainPossibility | undefined {
-  if (!raw) return undefined;
-  if (typeof raw === 'string') {
-    const name = raw.trim();
-    return name ? { name } : undefined;
-  }
-  if (typeof raw === 'object') {
-    const obj = raw as Record<string, unknown>;
-    const name = toCleanString(obj.name ?? obj.title ?? obj.possibility ?? obj.condition ?? obj.label);
-    if (!name) return undefined;
-    return {
-      name,
-      explanation: toCleanString(obj.explanation ?? obj.description ?? obj.summary ?? obj.detail),
-      whyItMatches: toCleanString(obj.whyItMatches ?? obj.why_it_matches ?? obj.reason),
-      likelihood: normalizeLikelihood(obj.likelihood ?? obj.probability ?? obj.confidence),
-    };
-  }
-  return undefined;
-}
-
-function parseOtherPossibilities(raw: unknown): OtherPossibility[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) {
-    return raw
-      .map((item): OtherPossibility | null => {
-        if (typeof item === 'string') {
-          const name = item.trim();
-          return name ? { name } : null;
-        }
-        if (item && typeof item === 'object') {
-          const obj = item as Record<string, unknown>;
-          const name = toCleanString(obj.name ?? obj.title ?? obj.possibility ?? obj.condition ?? obj.label);
-          if (!name) return null;
-          return {
-            name,
-            explanation: toCleanString(obj.explanation ?? obj.description ?? obj.whyItMatches ?? obj.reason ?? obj.detail ?? obj.note),
-            likelihood: normalizeLikelihood(obj.likelihood ?? obj.probability ?? obj.confidence),
-          };
-        }
-        return null;
-      })
-      .filter((item): item is OtherPossibility => item !== null);
-  }
-  if (typeof raw === 'string') {
-    return toStringList(raw).map((name) => ({ name }));
-  }
-  return [];
-}
-
-function parseFoodsThatHelp(raw: unknown): FoodHelpItem[] {
-  if (!Array.isArray(raw)) {
-    if (typeof raw === 'string') {
-      return toStringList(raw).map((name) => ({ name }));
-    }
-    return [];
-  }
-  return raw
-    .map((item): FoodHelpItem | null => {
-      if (typeof item === 'string') {
-        const name = item.trim();
-        return name ? { name } : null;
-      }
-      if (item && typeof item === 'object') {
-        const obj = item as Record<string, unknown>;
-        const name = toCleanString(obj.name ?? obj.title ?? obj.food ?? obj.item);
-        if (!name) return null;
-        return {
-          name,
-          whyItHelps: toCleanString(obj.whyItHelps ?? obj.why_it_helps ?? obj.benefit ?? obj.why ?? obj.description),
-          howToGive: toCleanString(obj.howToGive ?? obj.how_to_give ?? obj.serving ?? obj.instructions ?? obj.howToUse),
-        };
-      }
-      return null;
-    })
-    .filter((item): item is FoodHelpItem => item !== null);
-}
-
-function parseFoodsToAvoid(raw: unknown): FoodAvoidItem[] {
-  if (!Array.isArray(raw)) {
-    if (typeof raw === 'string') {
-      return toStringList(raw).map((name) => ({ name }));
-    }
-    return [];
-  }
-  return raw
-    .map((item): FoodAvoidItem | null => {
-      if (typeof item === 'string') {
-        const name = item.trim();
-        return name ? { name } : null;
-      }
-      if (item && typeof item === 'object') {
-        const obj = item as Record<string, unknown>;
-        const name = toCleanString(obj.name ?? obj.title ?? obj.food ?? obj.item);
-        if (!name) return null;
-        return {
-          name,
-          why: toCleanString(obj.why ?? obj.reason ?? obj.risk ?? obj.description),
-        };
-      }
-      return null;
-    })
-    .filter((item): item is FoodAvoidItem => item !== null);
-}
-
-function parseHealthResponse(rawData: any): DetailedHealthResult {
-  const payload = rawData?.data && typeof rawData.data === 'object' ? rawData.data : rawData;
-  if (!payload || typeof payload !== 'object') {
-    throw new Error('Unexpected response from health check.');
-  }
-
-  const emergency = Boolean(
-    payload.emergency ?? payload.isEmergency ?? payload.is_emergency
-  );
-
-  const seriousness = normalizeSeriousness(
-    payload.seriousness ??
-      payload.severity ??
-      payload.howSeriousIsIt ??
-      payload.how_serious_is_it,
-    emergency
-  );
-
-  return {
-    simpleSummary: toCleanString(payload.simpleSummary ?? payload.simple_summary ?? payload.summary),
-    mainPossibility: parseMainPossibility(
-      payload.mainPossibility ??
-        payload.main_possibility ??
-        payload.primaryPossibility ??
-        payload.mostLikely
-    ),
-    otherPossibilities: parseOtherPossibilities(
-      payload.otherPossibilities ?? payload.other_possibilities ?? payload.alternatives
-    ),
-    seriousness,
-    seriousnessReason: toCleanString(payload.seriousnessReason ?? payload.seriousness_reason),
-    emergency,
-    warningSigns: toStringList(payload.warningSigns ?? payload.warning_signs),
-    whatToDoNow: toStringList(payload.whatToDoNow ?? payload.what_to_do_now ?? payload.careSteps),
-    foodsThatHelp: parseFoodsThatHelp(
-      payload.foodsThatHelp ?? payload.foods_that_help ?? payload.foodsOrCareThatHelp
-    ),
-    foodsToAvoid: parseFoodsToAvoid(
-      payload.foodsToAvoid ?? payload.foods_to_avoid ?? payload.thingsToAvoid
-    ),
-    waterRestAndCare: toStringList(
-      payload.waterRestAndCare ?? payload.water_rest_and_care ?? payload.supportiveCare
-    ),
-    howLongToRecover: toCleanString(payload.howLongToRecover ?? payload.how_long_to_recover),
-    prevention: toStringList(payload.prevention ?? payload.preventionTips),
-    whenToSeeExpert: toCleanString(
-      payload.whenToSeeExpert ?? payload.when_to_see_expert ?? payload.whenToSeeVet
-    ),
-    questionsToAskExpert: toStringList(
-      payload.questionsToAskExpert ?? payload.questions_to_ask_expert ?? payload.questionsToAsk
-    ),
-  };
-}
 
 function readInitialSubject(searchParams: URLSearchParams): HealthSubjectChoice {
   const urlName = searchParams.get('name');
@@ -332,6 +71,7 @@ function readInitialSubject(searchParams: URLSearchParams): HealthSubjectChoice 
 
 export const HealthCheckerPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { currentUser, setAuthModalOpen } = useAuth();
   const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
   const [searchInput, setSearchInput] = useState('');
   const [activeFilter, setActiveFilter] = useState('');
@@ -350,12 +90,40 @@ export const HealthCheckerPage: React.FC = () => {
   const [toast, setToast] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // My Care integration state
+  const [careSubjects, setCareSubjects] = useState<CareSubject[]>([]);
+  const [selectedCareSubjectId, setSelectedCareSubjectId] = useState<string | null>(null);
+  const [saveCareModalOpen, setSaveCareModalOpen] = useState(false);
+  const [savedDiaryTarget, setSavedDiaryTarget] = useState<{
+    subjectId: string;
+    subjectName: string;
+  } | null>(null);
+
   const typeSymptoms = getSymptomsForType(activeSubject.category);
 
   const showToast = (msg: string) => {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   };
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setCareSubjects([]);
+      setSelectedCareSubjectId(null);
+      return;
+    }
+    let active = true;
+    listCareSubjects()
+      .then((list) => {
+        if (active) setCareSubjects(list);
+      })
+      .catch(() => {
+        // Non-blocking: Health Help works even if care subjects cannot be fetched
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUser?.id]);
 
   const syncSubjectToUrlAndStorage = (choice: HealthSubjectChoice) => {
     try {
@@ -404,8 +172,13 @@ export const HealthCheckerPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [isChecking]);
 
-  const handleSelectSubject = (choice: HealthSubjectChoice) => {
+  const handleSelectSubject = (
+    choice: HealthSubjectChoice,
+    careSubjectId: string | null = null,
+    toastLabel?: string
+  ) => {
     setActiveSubject(choice);
+    setSelectedCareSubjectId(careSubjectId);
     setSelectedSymptoms([]);
     setSearchInput('');
     setActiveFilter('');
@@ -413,10 +186,29 @@ export const HealthCheckerPage: React.FC = () => {
     setDuration('today');
     setNote('');
     setHealthResult(null);
+    setSavedDiaryTarget(null);
     setCheckError(null);
     syncSubjectToUrlAndStorage(choice);
     setPickerOpen(false);
-    showToast(`Switched to: ${choice.commonName}`);
+    showToast(`Switched to: ${toastLabel || choice.commonName}`);
+  };
+
+  const handlePickCareSubject = (subj: CareSubject) => {
+    const mappedCategory = careKindToHealthCategory(subj.kind);
+    const commonName =
+      subj.speciesCommon.trim() || subj.speciesScientific.trim() || subj.name;
+    handleSelectSubject(
+      {
+        category: mappedCategory,
+        commonName,
+        scientificName: subj.speciesScientific.trim() || undefined,
+        photoUrl: subj.photoUrl || undefined,
+        taxonId: subj.inatTaxonId ?? undefined,
+        isCustom: !subj.speciesCommon.trim() && !subj.speciesScientific.trim(),
+      },
+      subj.id,
+      subj.name
+    );
   };
 
   const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -448,6 +240,7 @@ export const HealthCheckerPage: React.FC = () => {
 
   const toggleSymptom = (name: string) => {
     setHealthResult(null);
+    setSavedDiaryTarget(null);
     setCheckError(null);
     if (selectedSymptoms.includes(name)) {
       setSelectedSymptoms(selectedSymptoms.filter((s) => s !== name));
@@ -461,6 +254,7 @@ export const HealthCheckerPage: React.FC = () => {
     const cleaned = rawLabel.trim();
     if (!cleaned) return;
     setHealthResult(null);
+    setSavedDiaryTarget(null);
     setCheckError(null);
     const alreadyExists = selectedSymptoms.some(
       (s) => s.toLowerCase() === cleaned.toLowerCase()
@@ -533,6 +327,7 @@ export const HealthCheckerPage: React.FC = () => {
     if (selectedSymptoms.length === 0 || isChecking) return;
 
     setIsChecking(true);
+    setSavedDiaryTarget(null);
     setCheckError(null);
 
     const abortController = new AbortController();
@@ -700,6 +495,62 @@ export const HealthCheckerPage: React.FC = () => {
               </span>
             </div>
           </div>
+
+          {/* Check One of My Pets or Plants (when user has care subjects) */}
+          {currentUser && careSubjects.length > 0 && (
+            <div className="mb-space-sm pb-space-sm border-b border-outline-variant/20 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-label-sm text-label-sm font-semibold text-primary flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-[17px]" aria-hidden="true">
+                    favorite
+                  </span>
+                  <span>Check one of my pets or plants</span>
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {careSubjects.map((subj) => {
+                  const meta = CARE_KIND_META[subj.kind];
+                  const isActive = selectedCareSubjectId === subj.id;
+                  return (
+                    <button
+                      key={subj.id}
+                      type="button"
+                      onClick={() => handlePickCareSubject(subj)}
+                      aria-pressed={isActive}
+                      className={`inline-flex items-center gap-2 pl-1.5 pr-3 py-1 min-h-[38px] rounded-full border text-left transition-all active:scale-95 ${
+                        isActive
+                          ? 'bg-primary text-on-primary border-primary shadow-sm'
+                          : 'bg-surface-container hover:bg-surface-container-high text-on-surface border-outline-variant/30'
+                      }`}
+                    >
+                      {subj.photoUrl ? (
+                        <img
+                          src={subj.photoUrl}
+                          alt={subj.name}
+                          className="w-6 h-6 rounded-full object-cover shrink-0"
+                        />
+                      ) : (
+                        <span
+                          className={`w-6 h-6 rounded-full flex items-center justify-center shrink-0 ${
+                            isActive
+                              ? 'bg-on-primary/20 text-on-primary'
+                              : 'bg-secondary-container/60 text-primary'
+                          }`}
+                        >
+                          <span className="material-symbols-outlined text-[15px]">
+                            {meta.icon}
+                          </span>
+                        </span>
+                      )}
+                      <span className="font-label-md text-xs font-semibold truncate max-w-[140px]">
+                        {subj.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Current Subject Strip */}
           <div className="bg-surface-container rounded-lg p-space-sm flex flex-wrap sm:flex-nowrap items-center justify-between gap-space-sm">
@@ -1051,9 +902,71 @@ export const HealthCheckerPage: React.FC = () => {
               subjectCategory={activeSubject.category}
               duration={duration}
               onNotify={showToast}
+              extraActions={
+                savedDiaryTarget ? (
+                  <div className="inline-flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 px-3.5 min-h-[44px] rounded-full bg-emerald-100 text-emerald-900 font-label-md text-label-md font-semibold">
+                      <span className="material-symbols-outlined text-[18px]">check_circle</span>
+                      <span>Saved</span>
+                    </span>
+                    <Link
+                      to={`/care/${savedDiaryTarget.subjectId}`}
+                      className="inline-flex items-center gap-1.5 px-4 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-semibold shadow-sm hover:opacity-95"
+                    >
+                      <span>View {savedDiaryTarget.subjectName}&apos;s diary</span>
+                      <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
+                    </Link>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!currentUser) {
+                        setAuthModalOpen(true);
+                        showToast('Please sign in to save to your care diary');
+                        return;
+                      }
+                      setSaveCareModalOpen(true);
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 px-4 min-h-[44px] rounded-full bg-primary text-on-primary hover:opacity-95 font-label-md text-label-md font-semibold shadow-sm transition-opacity active:scale-95"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">bookmark_add</span>
+                    <span>Save to care diary</span>
+                  </button>
+                )
+              }
             />
           )}
         </div>
+      )}
+
+      {/* Save Health Result to Care Diary Modal */}
+      {healthResult && (
+        <SaveHealthToCareModal
+          isOpen={saveCareModalOpen}
+          healthResult={healthResult}
+          subjectCategory={activeSubject.category}
+          subjectCommonName={activeSubject.commonName}
+          subjectScientificName={activeSubject.scientificName}
+          subjectTaxonId={activeSubject.taxonId}
+          preselectedSubjectId={selectedCareSubjectId}
+          symptoms={selectedSymptoms}
+          duration={duration}
+          userNote={note}
+          onClose={() => setSaveCareModalOpen(false)}
+          onSaved={(savedSubject) => {
+            setCareSubjects((prev) => [
+              savedSubject,
+              ...prev.filter((s) => s.id !== savedSubject.id),
+            ]);
+            setSelectedCareSubjectId(savedSubject.id);
+            setSavedDiaryTarget({
+              subjectId: savedSubject.id,
+              subjectName: savedSubject.name,
+            });
+            showToast(`Saved to ${savedSubject.name}'s care diary`);
+          }}
+        />
       )}
 
       {/* Urgent Action & Vet Assistance Locator */}

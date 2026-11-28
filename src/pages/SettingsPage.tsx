@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
+import { deleteAllCareData } from '../services/careService';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -14,6 +15,9 @@ export const SettingsPage: React.FC = () => {
   const [savingPublicProfile, setSavingPublicProfile] = useState(false);
   const [publicProfileError, setPublicProfileError] = useState<string | null>(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showDeleteCareModal, setShowDeleteCareModal] = useState(false);
+  const [deletingCareData, setDeletingCareData] = useState(false);
+  const [deleteCareError, setDeleteCareError] = useState<string | null>(null);
   const [clearingPrefs, setClearingPrefs] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -60,7 +64,7 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleClearInterestsAndLocation = async () => {
+  const handleClearInterests = async () => {
     if (!currentUser || clearingPrefs) return;
     setClearingPrefs(true);
     setPrefsError(null);
@@ -88,12 +92,29 @@ export const SettingsPage: React.FC = () => {
             }
           : null
       );
-      showToast('Saved interests and location deleted');
+      showToast('Saved interests and favorites deleted');
     } catch (err: any) {
-      console.error('Failed to delete saved interests & location:', err);
-      setPrefsError(err?.message || 'Could not delete saved interests and location.');
+      console.error('Failed to delete saved interests & favorites:', err);
+      setPrefsError(err?.message || 'Could not delete saved interests and favorites.');
     } finally {
       setClearingPrefs(false);
+    }
+  };
+
+  const handleDeleteAllCareData = async () => {
+    if (!currentUser || deletingCareData) return;
+    setDeletingCareData(true);
+    setDeleteCareError(null);
+    try {
+      await deleteAllCareData();
+      setShowDeleteCareModal(false);
+      showToast('All your care data has been deleted');
+    } catch (err: any) {
+      setDeleteCareError(
+        err?.message || 'Could not delete your care data. Please try again.'
+      );
+    } finally {
+      setDeletingCareData(false);
     }
   };
 
@@ -358,21 +379,20 @@ export const SettingsPage: React.FC = () => {
           className="w-full min-h-[44px] px-4 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-bold flex items-center justify-center gap-2 hover:opacity-95"
         >
           <span className="material-symbols-outlined text-[18px]">tune</span>
-          <span>Edit my interests and location</span>
+          <span>Edit my interests &amp; favorites</span>
         </Link>
 
         {currentUser &&
           (((privatePrefs ?? userProfile)?.interests?.length ?? 0) > 0 ||
-            ((privatePrefs ?? userProfile)?.favoriteSpecies?.length ?? 0) > 0 ||
-            (privatePrefs ?? userProfile)?.locationConsent) && (
+            ((privatePrefs ?? userProfile)?.favoriteSpecies?.length ?? 0) > 0) && (
             <button
               type="button"
               disabled={clearingPrefs}
-              onClick={handleClearInterestsAndLocation}
+              onClick={handleClearInterests}
               className="w-full min-h-[44px] px-4 rounded-full bg-surface-container text-error font-label-md text-label-md font-semibold flex items-center justify-center gap-2 hover:bg-error-container/25 disabled:opacity-50"
             >
-              <span className="material-symbols-outlined text-[18px]">location_off</span>
-              <span>{clearingPrefs ? 'Deleting...' : 'Delete saved interests & location'}</span>
+              <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
+              <span>{clearingPrefs ? 'Deleting...' : 'Delete saved interests & favorites'}</span>
             </button>
           )}
 
@@ -381,12 +401,26 @@ export const SettingsPage: React.FC = () => {
             <p className="font-body-sm text-body-sm text-error">{prefsError}</p>
             <button
               type="button"
-              onClick={handleClearInterestsAndLocation}
+              onClick={handleClearInterests}
               className="px-3 py-1 rounded-full bg-error text-on-error font-label-sm text-label-sm font-semibold shrink-0"
             >
               Retry
             </button>
           </div>
+        )}
+
+        {currentUser && (
+          <button
+            type="button"
+            onClick={() => {
+              setDeleteCareError(null);
+              setShowDeleteCareModal(true);
+            }}
+            className="w-full min-h-[44px] px-4 rounded-full bg-surface-container text-error font-label-md text-label-md font-semibold flex items-center justify-center gap-2 hover:bg-error-container/25"
+          >
+            <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
+            <span>Delete all my care data</span>
+          </button>
         )}
 
         <button
@@ -397,6 +431,78 @@ export const SettingsPage: React.FC = () => {
           <span>Delete Account & Saved Items</span>
         </button>
       </div>
+
+      {/* Delete All Care Data Confirmation Modal */}
+      {showDeleteCareModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => {
+            if (!deletingCareData) {
+              setShowDeleteCareModal(false);
+              setDeleteCareError(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Delete all my care data"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-surface-container p-6 shadow-2xl flex flex-col gap-4 text-center border border-outline-variant/30"
+          >
+            <div className="w-14 h-14 rounded-full bg-error-container text-on-error-container flex items-center justify-center mx-auto">
+              <span className="material-symbols-outlined text-[28px]">warning</span>
+            </div>
+            <div>
+              <h3 className="font-headline-sm text-headline-sm text-on-surface">
+                Delete all my care data?
+              </h3>
+              <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">
+                This will permanently delete all your pets and plants in My Care, all care diary entries, all reminders, and all care photos. This cannot be undone.
+              </p>
+            </div>
+            {deleteCareError && (
+              <div className="p-3 rounded-xl bg-error-container/30 border border-error/35 text-xs text-on-error-container flex items-center justify-between gap-2 text-left">
+                <span>{deleteCareError}</span>
+                <button
+                  type="button"
+                  disabled={deletingCareData}
+                  onClick={handleDeleteAllCareData}
+                  className="px-2.5 py-1 rounded-full bg-surface text-primary font-semibold border border-outline-variant/40 shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={deletingCareData}
+                onClick={() => {
+                  setShowDeleteCareModal(false);
+                  setDeleteCareError(null);
+                }}
+                className="flex-1 h-11 rounded-full bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingCareData}
+                onClick={handleDeleteAllCareData}
+                className="flex-1 h-11 rounded-full bg-error text-on-error font-label-md text-label-md font-bold disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
+              >
+                {deletingCareData && (
+                  <span className="material-symbols-outlined text-[18px] animate-spin">
+                    progress_activity
+                  </span>
+                )}
+                <span>{deletingCareData ? 'Deleting...' : 'Delete'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {showDeleteModal && (

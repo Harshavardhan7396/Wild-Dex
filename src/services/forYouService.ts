@@ -154,23 +154,17 @@ function mapTaxonToCard(
 
 /**
  * Fetch personalized "For You" species using iNaturalist species_counts API.
- * Uses rounded home location (50km radius) when available, otherwise fetches worldwide popular species.
+ * Always shows popular species worldwide for the user's interests.
  */
 export async function fetchForYouSpecies(params: {
   interests: string[];
-  lat: number | null;
-  lng: number | null;
-  hasLocation: boolean;
   forceRefresh?: boolean;
   signal?: AbortSignal;
 }): Promise<ForYouSpeciesItem[]> {
-  const { interests, lat, lng, hasLocation, forceRefresh = false, signal } = params;
+  const { interests, forceRefresh = false, signal } = params;
   const iconicTaxa = mapInterestsToIconicTaxa(interests);
-  const useLocation = Boolean(hasLocation && lat !== null && lng !== null);
-  const roundedLat = useLocation && lat !== null ? Math.round(lat * 100) / 100 : null;
-  const roundedLng = useLocation && lng !== null ? Math.round(lng * 100) / 100 : null;
 
-  const cacheKey = `${useLocation ? `${roundedLat},${roundedLng}` : 'world'}|${iconicTaxa.join(',')}`;
+  const cacheKey = `world|${iconicTaxa.join(',')}`;
   if (!forceRefresh) {
     const cached = speciesCountsCache.get(cacheKey);
     if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
@@ -182,12 +176,6 @@ export async function fetchForYouSpecies(params: {
     locale: 'en',
     per_page: '12',
   });
-
-  if (useLocation && roundedLat !== null && roundedLng !== null) {
-    queryParams.set('lat', String(roundedLat));
-    queryParams.set('lng', String(roundedLng));
-    queryParams.set('radius', '50');
-  }
 
   if (iconicTaxa.length > 0) {
     queryParams.set('iconic_taxa', iconicTaxa.join(','));
@@ -204,7 +192,7 @@ export async function fetchForYouSpecies(params: {
     const results = Array.isArray(json?.results) ? json.results : [];
     const items: ForYouSpeciesItem[] = results
       .filter((r: any) => r?.taxon?.id && r?.taxon?.name)
-      .map((r: any) => mapTaxonToCard(r.taxon, Number(r.count || 0), useLocation));
+      .map((r: any) => mapTaxonToCard(r.taxon, Number(r.count || 0), false));
 
     speciesCountsCache.set(cacheKey, { timestamp: Date.now(), data: items });
     return items;

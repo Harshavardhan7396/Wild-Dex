@@ -27,6 +27,8 @@ import {
   getMatchScoreMeaning,
   formatMatchScore,
 } from '../utils/formatters';
+import { CareSubjectFormModal, CareSubjectPrefill } from '../components/care/CareSubjectFormModal';
+import { CareSubject, inferCareKindFromCategory } from '../services/careService';
 
 export const ScannerPage: React.FC = () => {
   const navigate = useNavigate();
@@ -68,6 +70,8 @@ export const ScannerPage: React.FC = () => {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveNotes, setSaveNotes] = useState('');
   const [includeGps, setIncludeGps] = useState(true);
+  const [careModalOpen, setCareModalOpen] = useState(false);
+  const [carePrefill, setCarePrefill] = useState<CareSubjectPrefill | null>(null);
   const [isSavingToDex, setIsSavingToDex] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selectedAlbumId, setSelectedAlbumId] = useState('default');
@@ -1261,6 +1265,31 @@ export const ScannerPage: React.FC = () => {
               <span className="material-symbols-outlined text-[20px]">share</span>
             </button>
           </div>
+
+          {!scanResult.notASpecies && inferCareKindFromCategory(scanResult.category) !== null && (
+            <button
+              type="button"
+              onClick={() => {
+                const kind = inferCareKindFromCategory(scanResult.category);
+                if (!kind) return;
+                if (!currentUser) {
+                  setAuthModalOpen(true);
+                  showToast('Please sign in to add to My Care');
+                  return;
+                }
+                setCarePrefill({
+                  kind,
+                  speciesCommon: scanResult.commonName || '',
+                  speciesScientific: scanResult.scientificName || '',
+                });
+                setCareModalOpen(true);
+              }}
+              className="w-full min-h-[44px] px-4 rounded-full bg-secondary-container/75 hover:bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
+            >
+              <span className="material-symbols-outlined text-[18px]">favorite</span>
+              <span>Add to My Care</span>
+            </button>
+          )}
         </section>
       )}
 
@@ -1583,6 +1612,17 @@ export const ScannerPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <CareSubjectFormModal
+        isOpen={careModalOpen}
+        subjectToEdit={null}
+        prefill={carePrefill}
+        onClose={() => setCareModalOpen(false)}
+        onSaved={(saved: CareSubject) => {
+          setCareModalOpen(false);
+          showToast(`Added ${saved.name} to My Care`);
+        }}
+      />
     </div>
   );
 };

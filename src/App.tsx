@@ -17,9 +17,12 @@ import { SharedCollectionPage } from './pages/SharedCollectionPage';
 import { JoinAlbumPage } from './pages/JoinAlbumPage';
 import { LeaderboardPage } from './pages/LeaderboardPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { NearbyPage } from './pages/NearbyPage';
 import { LoginPage } from './pages/LoginPage';
 import { PublicProfilePage } from './pages/PublicProfilePage';
+import { MessagesPage } from './pages/MessagesPage';
+import { ChatPage } from './pages/ChatPage';
+import { CarePage } from './pages/CarePage';
+import { CareDetailPage } from './pages/CareDetailPage';
 
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
@@ -158,15 +161,18 @@ function AppContent() {
           <Route path="/lifecycle" element={<LifecyclePage />} />
           <Route path="/health" element={<HealthCheckerPage />} />
           <Route path="/collection" element={<CollectionPage />} />
+          <Route path="/care" element={<CarePage />} />
+          <Route path="/care/:id" element={<CareDetailPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/u/:username" element={<PublicProfilePage />} />
+          <Route path="/messages" element={<MessagesPage />} />
+          <Route path="/messages/:conversationId" element={<ChatPage />} />
           <Route path="/feed" element={<FeedPage />} />
           <Route path="/invite" element={<InviteFriendsPage />} />
           <Route path="/shared-collection" element={<SharedCollectionPage />} />
           <Route path="/shared-collection/:albumId" element={<SharedCollectionPage />} />
           <Route path="/join/:code" element={<JoinAlbumPage />} />
           <Route path="/leaderboard" element={<LeaderboardPage />} />
-          <Route path="/nearby" element={<NearbyPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/onboarding" element={<OnboardingPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />

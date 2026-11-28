@@ -6,13 +6,24 @@ import {
   FirebaseCollectionItem,
   getFirebaseUserCollection,
 } from '../services/supabaseCollectionService';
+import {
+  FollowListKind,
+  fetchUserFollowCounts,
+} from '../services/publicProfileService';
+import {
+  FollowListSheet,
+  FollowCountsDelta,
+} from '../components/profile/FollowListSheet';
 
 export const ProfilePage: React.FC = () => {
-  const { currentUser, userProfile, logout, saveOnboardingPreferences } = useAuth();
+  const { currentUser, userProfile, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<'sightings' | 'badges' | 'taxonomy'>('sightings');
   const [userSpecimens, setUserSpecimens] = useState<FirebaseCollectionItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [clearingLocation, setClearingLocation] = useState(false);
+  const [followersCount, setFollowersCount] = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [followSheetOpen, setFollowSheetOpen] = useState(false);
+  const [followSheetTab, setFollowSheetTab] = useState<FollowListKind>('followers');
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -21,14 +32,47 @@ export const ProfilePage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (currentUser) {
-      setLoading(true);
-      getFirebaseUserCollection(currentUser.uid)
-        .then((items) => setUserSpecimens(items))
-        .catch(() => {})
-        .finally(() => setLoading(false));
+    if (!currentUser) {
+      setFollowersCount(0);
+      setFollowingCount(0);
+      return;
     }
+
+    let cancelled = false;
+    setLoading(true);
+
+    Promise.all([
+      getFirebaseUserCollection(currentUser.uid).catch(() => [] as FirebaseCollectionItem[]),
+      fetchUserFollowCounts(currentUser.id).catch(() => ({ followersCount: 0, followingCount: 0 })),
+    ])
+      .then(([items, counts]) => {
+        if (cancelled) return;
+        setUserSpecimens(items);
+        setFollowersCount(counts.followersCount);
+        setFollowingCount(counts.followingCount);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser]);
+
+  const handleOpenFollowSheet = (kind: FollowListKind) => {
+    setFollowSheetTab(kind);
+    setFollowSheetOpen(true);
+  };
+
+  const handleCountsDelta = (delta: FollowCountsDelta) => {
+    if (delta.followersDelta) {
+      setFollowersCount((c) => Math.max(0, c + delta.followersDelta!));
+    }
+    if (delta.followingDelta) {
+      setFollowingCount((c) => Math.max(0, c + delta.followingDelta!));
+    }
+  };
 
   const totalLogged = userSpecimens.length;
   const rareLogged = userSpecimens.filter((s) => s.rarity !== 'Common').length;
@@ -195,7 +239,7 @@ export const ProfilePage: React.FC = () => {
                 <span className="material-symbols-outlined text-[18px] text-secondary">verified</span>
               </div>
               <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
-                {userProfile?.location || 'Field Observer'} • {currentUser.email || userProfile?.email}
+                Field Observer • {currentUser.email || userProfile?.email}
               </p>
               <div className="flex flex-wrap items-center gap-2 mt-1">
                 <span className="px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-bold capitalize">
@@ -213,7 +257,7 @@ export const ProfilePage: React.FC = () => {
           </p>
 
           {/* Stats Row */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-outline-variant/30 text-center">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 pt-2 border-t border-outline-variant/30 text-center">
             <div className="p-2 rounded-2xl bg-surface-container-lowest">
               <span className="font-headline-sm text-headline-sm text-primary font-bold">
                 {totalLogged}
@@ -238,8 +282,44 @@ export const ProfilePage: React.FC = () => {
               </span>
               <p className="font-label-sm text-[10px] text-on-surface-variant">Legendary</p>
             </div>
+            <button
+              type="button"
+              onClick={() => handleOpenFollowSheet('followers')}
+              className="p-2 rounded-2xl bg-surface-container-lowest hover:bg-surface-container transition-colors cursor-pointer text-center focus:outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              <span className="font-headline-sm text-headline-sm text-on-surface font-bold">
+                {followersCount}
+              </span>
+              <p className="font-label-sm text-[10px] text-on-surface-variant">Followers</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleOpenFollowSheet('following')}
+              className="p-2 rounded-2xl bg-surface-container-lowest hover:bg-surface-container transition-colors cursor-pointer text-center focus:outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              <span className="font-headline-sm text-headline-sm text-on-surface font-bold">
+                {followingCount}
+              </span>
+              <p className="font-label-sm text-[10px] text-on-surface-variant">Following</p>
+            </button>
           </div>
         </div>
+      )}
+
+      {currentUser && (
+        <FollowListSheet
+          open={followSheetOpen}
+          initialTab={followSheetTab}
+          targetUserId={currentUser.id}
+          targetUsername={userProfile?.displayName || currentUser.displayName || 'My Profile'}
+          currentUserId={currentUser.id}
+          isOwner={true}
+          isPublic={userProfile?.isPublic !== false}
+          followersCount={followersCount}
+          followingCount={followingCount}
+          onClose={() => setFollowSheetOpen(false)}
+          onCountsDelta={handleCountsDelta}
+        />
       )}
 
       {/* Quick Navigation Hub */}
@@ -266,14 +346,14 @@ export const ProfilePage: React.FC = () => {
         </Link>
       </div>
 
-      {/* Interests & Location Summary + Edit CTA */}
+      {/* Interests & Favorites Summary + Edit CTA */}
       {currentUser && (
         <div className="p-3.5 sm:p-space-md rounded-2xl bg-surface-container-low shadow-sm space-y-3 border border-outline-variant/20">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <span className="material-symbols-outlined text-primary text-[20px]">tune</span>
               <h2 className="font-headline-sm text-headline-sm text-on-surface">
-                My Interests &amp; Area
+                My Interests &amp; Favorites
               </h2>
             </div>
             <Link
@@ -281,7 +361,7 @@ export const ProfilePage: React.FC = () => {
               className="inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold hover:opacity-95 transition-opacity shrink-0"
             >
               <span className="material-symbols-outlined text-[16px]">edit</span>
-              <span>Edit my interests and location</span>
+              <span>Edit my interests &amp; favorites</span>
             </Link>
           </div>
 
@@ -316,50 +396,6 @@ export const ProfilePage: React.FC = () => {
             </div>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-outline-variant/20">
-            <div className="flex items-center gap-1.5 text-on-surface-variant font-body-sm text-body-sm">
-              <span className="material-symbols-outlined text-[16px] text-secondary">
-                {userProfile?.locationConsent ? 'location_on' : 'location_off'}
-              </span>
-              <span>
-                {userProfile?.locationConsent && userProfile.homeLat != null && userProfile.homeLng != null
-                  ? userProfile.homeLabel
-                    ? `Private area (~1 km): ${userProfile.homeLabel} (${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)})`
-                    : `Private area (~1 km): ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
-                  : 'Home location not set'}
-              </span>
-            </div>
-
-            {userProfile?.locationConsent && (
-              <button
-                type="button"
-                disabled={clearingLocation}
-                onClick={async () => {
-                  setClearingLocation(true);
-                  try {
-                    await saveOnboardingPreferences({
-                      interests: userProfile.interests || [],
-                      favoriteSpecies: userProfile.favoriteSpecies || [],
-                      onboardingDone: true,
-                      locationConsent: false,
-                      homeLat: null,
-                      homeLng: null,
-                      homeLabel: '',
-                    });
-                    showToast('Saved location removed');
-                  } catch (err: any) {
-                    console.error('Could not remove location:', err);
-                    showToast(err?.message || 'Could not remove location');
-                  } finally {
-                    setClearingLocation(false);
-                  }
-                }}
-                className="font-label-sm text-label-sm text-error font-semibold hover:underline disabled:opacity-50"
-              >
-                {clearingLocation ? 'Removing...' : 'Delete location'}
-              </button>
-            )}
-          </div>
         </div>
       )}
 

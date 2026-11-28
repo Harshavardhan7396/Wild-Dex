@@ -2,15 +2,32 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import {
+  FollowListKind,
   PublicProfileData,
   PublicUserPost,
   PublicCollectionItem,
+  UserRelationship,
   getProfileByUsername,
   fetchPublicUserPosts,
   fetchPublicUserCollection,
   fetchIsFollowingUser,
+  fetchRelationship,
   toggleFollowUser,
+  blockUser,
+  reportUser,
 } from '../services/publicProfileService';
+import {
+  FollowListSheet,
+  FollowCountsDelta,
+} from '../components/profile/FollowListSheet';
+import { startConversation } from '../services/chatService';
+
+const REPORT_REASONS = [
+  'Spam or misleading sightings',
+  'Harassment or inappropriate behavior',
+  'Impersonation',
+  'Inappropriate content or photos',
+];
 
 function formatRelativeDate(isoDate: string): string {
   if (!isoDate) return '';
@@ -34,7 +51,12 @@ export const PublicProfilePage: React.FC = () => {
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [profileError, setProfileError] = useState<string | null>(null);
 
-  const [isFollowing, setIsFollowing] = useState(false);
+  const [relationship, setRelationship] = useState<UserRelationship>({
+    iFollow: false,
+    followsMe: false,
+    isBlocked: false,
+  });
+  const [relationshipError, setRelationshipError] = useState<string | null>(null);
   const [followBusy, setFollowBusy] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
 
@@ -48,9 +70,32 @@ export const PublicProfilePage: React.FC = () => {
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [collectionError, setCollectionError] = useState<string | null>(null);
 
+  // Follow sheet state
+  const [followSheetOpen, setFollowSheetOpen] = useState(false);
+  const [followSheetTab, setFollowSheetTab] = useState<FollowListKind>('followers');
+
+  // More menu (⋯), Block, Report, and Message dialogs
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [confirmBlockOpen, setConfirmBlockOpen] = useState(false);
+  const [blockBusy, setBlockBusy] = useState(false);
+
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportReason, setReportReason] = useState(REPORT_REASONS[0]);
+  const [reportNotes, setReportNotes] = useState('');
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportModalError, setReportModalError] = useState<string | null>(null);
+
+  const [messageBusy, setMessageBusy] = useState(false);
+  const [actionToast, setActionToast] = useState<string | null>(null);
+
   const isOwnProfile = Boolean(
     currentUser && profile && currentUser.id === profile.id
   );
+
+  const showToast = (msg: string) => {
+    setActionToast(msg);
+    setTimeout(() => setActionToast(null), 3000);
+  };
 
   const loadPosts = useCallback(async (targetUserId: string) => {
     setPostsLoading(true);
@@ -78,6 +123,32 @@ export const PublicProfilePage: React.FC = () => {
     }
   }, []);
 
+  const loadRelationshipState = useCallback(
+    async (targetUserId: string) => {
+      if (!currentUser || !targetUserId || currentUser.id === targetUserId) {
+        setRelationship({ iFollow: false, followsMe: false, isBlocked: false });
+        setRelationshipError(null);
+        return;
+      }
+
+      setRelationshipError(null);
+      try {
+        const rel = await fetchRelationship(targetUserId);
+        setRelationship(rel);
+      } catch (err: any) {
+        console.warn('relationship RPC failed, falling back to user_follows check:', err);
+        setRelationshipError(err?.message || 'Could not load relationship status.');
+        try {
+          const following = await fetchIsFollowingUser(currentUser.id, targetUserId);
+          setRelationship({ iFollow: following, followsMe: false, isBlocked: false });
+        } catch {
+          setRelationship({ iFollow: false, followsMe: false, isBlocked: false });
+        }
+      }
+    },
+    [currentUser?.id]
+  );
+
   const loadProfile = useCallback(async () => {
     const clean = decodeURIComponent(username || '').trim();
     if (!clean) {
@@ -91,6 +162,8 @@ export const PublicProfilePage: React.FC = () => {
     setProfileError(null);
     setNotFound(false);
     setFollowError(null);
+    setRelationshipError(null);
+    setMoreMenuOpen(false);
     setPosts([]);
     setCollectionItems([]);
     setPostsError(null);
@@ -108,16 +181,11 @@ export const PublicProfilePage: React.FC = () => {
 
       const isSelf = Boolean(currentUser && currentUser.id === loaded.id);
 
-      // Load follow state when signed in and viewing someone else
+      // Load relationship when signed in and viewing someone else
       if (currentUser && !isSelf && loaded.id) {
-        try {
-          const following = await fetchIsFollowingUser(currentUser.id, loaded.id);
-          setIsFollowing(following);
-        } catch {
-          setIsFollowing(false);
-        }
+        await loadRelationshipState(loaded.id);
       } else {
-        setIsFollowing(false);
+        setRelationship({ iFollow: false, followsMe: false, isBlocked: false });
       }
 
       // Only load public posts and public collection when permitted
@@ -137,7 +205,7 @@ export const PublicProfilePage: React.FC = () => {
     } finally {
       setLoadingProfile(false);
     }
-  }, [username, currentUser?.id, loadPosts, loadCollection]);
+  }, [username, currentUser?.id, loadPosts, loadCollection, loadRelationshipState]);
 
   useEffect(() => {
     loadProfile();
@@ -152,10 +220,11 @@ export const PublicProfilePage: React.FC = () => {
 
     setFollowBusy(true);
     setFollowError(null);
-    const currentlyFollowing = isFollowing;
+    const currentlyFollowing = relationship.iFollow;
+    const optimisticNext = !currentlyFollowing;
 
     // Optimistic update
-    setIsFollowing(!currentlyFollowing);
+    setRelationship((prev) => ({ ...prev, iFollow: optimisticNext }));
     setProfile((prev) =>
       prev
         ? {
@@ -174,10 +243,10 @@ export const PublicProfilePage: React.FC = () => {
         followingId: profile.id,
         currentlyFollowing,
       });
-      setIsFollowing(nextState);
+      setRelationship((prev) => ({ ...prev, iFollow: nextState }));
     } catch (err: any) {
-      // Revert optimistic update on failure
-      setIsFollowing(currentlyFollowing);
+      // Roll back optimistic update on failure
+      setRelationship((prev) => ({ ...prev, iFollow: currentlyFollowing }));
       setProfile((prev) =>
         prev
           ? {
@@ -193,6 +262,127 @@ export const PublicProfilePage: React.FC = () => {
     } finally {
       setFollowBusy(false);
     }
+  };
+
+  const handleConfirmBlock = async () => {
+    if (!profile || isOwnProfile || blockBusy) return;
+    if (!currentUser) {
+      setConfirmBlockOpen(false);
+      setAuthModalOpen(true);
+      return;
+    }
+
+    setBlockBusy(true);
+    setFollowError(null);
+    const prevRel = relationship;
+
+    try {
+      await blockUser(profile.id);
+      setRelationship({ iFollow: false, followsMe: false, isBlocked: true });
+      if (prevRel.iFollow) {
+        setProfile((prev) =>
+          prev
+            ? { ...prev, followersCount: Math.max(0, prev.followersCount - 1) }
+            : prev
+        );
+      }
+      setConfirmBlockOpen(false);
+      showToast(`Blocked ${profile.username}.`);
+    } catch (err: any) {
+      setFollowError(err?.message || 'Could not block user.');
+      setConfirmBlockOpen(false);
+    } finally {
+      setBlockBusy(false);
+    }
+  };
+
+  const handleSubmitReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!profile || reportBusy) return;
+    if (!currentUser) {
+      setReportModalOpen(false);
+      setAuthModalOpen(true);
+      return;
+    }
+
+    const fullReason = reportNotes.trim()
+      ? `${reportReason}: ${reportNotes.trim()}`
+      : reportReason;
+
+    setReportBusy(true);
+    setReportModalError(null);
+    try {
+      await reportUser({
+        reportedUserId: profile.id,
+        reporterId: currentUser.id,
+        reason: fullReason,
+      });
+      setReportModalOpen(false);
+      setReportNotes('');
+      showToast('Report submitted. Thank you for keeping WildDex safe.');
+    } catch (err: any) {
+      setReportModalError(err?.message || 'Could not submit report.');
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
+  const handleStartMessage = async () => {
+    if (!profile || isOwnProfile || messageBusy) return;
+    if (!currentUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+
+    setMessageBusy(true);
+    setFollowError(null);
+    try {
+      const conversationId = await startConversation(profile.id);
+      navigate(`/messages/${encodeURIComponent(conversationId)}`);
+    } catch (err: any) {
+      setFollowError(err?.message || 'Could not start conversation.');
+    } finally {
+      setMessageBusy(false);
+    }
+  };
+
+  const openFollowSheet = (kind: FollowListKind) => {
+    setFollowSheetTab(kind);
+    setFollowSheetOpen(true);
+  };
+
+  const handleCountsDelta = (delta: FollowCountsDelta) => {
+    setProfile((prev) =>
+      prev
+        ? {
+            ...prev,
+            followersCount: Math.max(
+              0,
+              prev.followersCount + (delta.followersDelta || 0)
+            ),
+            followingCount: Math.max(
+              0,
+              prev.followingCount + (delta.followingDelta || 0)
+            ),
+          }
+        : prev
+    );
+  };
+
+  const handleViewerFollowTargetChange = (targetId: string, nowFollowing: boolean) => {
+    if (!profile || targetId !== profile.id) return;
+    setRelationship((prev) => {
+      if (prev.iFollow === nowFollowing) return prev;
+      setProfile((p) =>
+        p
+          ? {
+              ...p,
+              followersCount: Math.max(0, p.followersCount + (nowFollowing ? 1 : -1)),
+            }
+          : p
+      );
+      return { ...prev, iFollow: nowFollowing };
+    });
   };
 
   const renderAvatar = (p: PublicProfileData) => {
@@ -213,8 +403,143 @@ export const PublicProfilePage: React.FC = () => {
     );
   };
 
+  const renderPersonActions = (p: PublicProfileData) => {
+    if (isOwnProfile) {
+      return (
+        <Link
+          to="/profile"
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold hover:opacity-95 transition-opacity"
+        >
+          <span className="material-symbols-outlined text-[17px]">edit</span>
+          <span>Edit profile</span>
+        </Link>
+      );
+    }
+
+    const followButtonLabel = relationship.iFollow
+      ? 'Following'
+      : relationship.followsMe
+      ? 'Follow back'
+      : 'Follow';
+
+    const canMessage = relationship.iFollow && relationship.followsMe && !relationship.isBlocked;
+    const showFollowBackToMessage =
+      relationship.followsMe && !relationship.iFollow && !relationship.isBlocked;
+
+    return (
+      <div className="flex flex-col items-end gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {!relationship.isBlocked ? (
+            <button
+              type="button"
+              disabled={followBusy}
+              onClick={handleToggleFollow}
+              className={`px-5 py-2 rounded-full font-label-md text-label-md font-semibold transition-colors disabled:opacity-60 ${
+                relationship.iFollow
+                  ? 'bg-surface-container text-on-surface hover:bg-surface-container-lowest'
+                  : 'bg-primary text-on-primary hover:opacity-95'
+              }`}
+            >
+              {followBusy ? '...' : followButtonLabel}
+            </button>
+          ) : (
+            <span className="px-4 py-2 rounded-full bg-surface-container text-on-surface-variant font-label-md text-xs font-semibold">
+              Blocked
+            </span>
+          )}
+
+          {canMessage && (
+            <button
+              type="button"
+              disabled={messageBusy}
+              onClick={handleStartMessage}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold hover:opacity-95 transition-opacity disabled:opacity-60"
+            >
+              <span className="material-symbols-outlined text-[17px]">mail</span>
+              <span>{messageBusy ? 'Opening...' : 'Message'}</span>
+            </button>
+          )}
+
+          {/* ⋯ Menu with Block & Report */}
+          <div className="relative">
+            <button
+              type="button"
+              aria-label="More profile actions"
+              aria-expanded={moreMenuOpen}
+              onClick={() => setMoreMenuOpen((prev) => !prev)}
+              className="w-10 h-10 rounded-full bg-surface-container flex items-center justify-center text-on-surface hover:bg-surface-container-lowest transition-colors"
+            >
+              <span className="material-symbols-outlined text-[20px]">more_horiz</span>
+            </button>
+
+            {moreMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setMoreMenuOpen(false)}
+                />
+                <div className="absolute right-0 mt-1.5 w-44 rounded-2xl bg-surface-container-lowest border border-outline-variant/30 shadow-xl py-1.5 z-30 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      if (!currentUser) {
+                        setAuthModalOpen(true);
+                        return;
+                      }
+                      setConfirmBlockOpen(true);
+                    }}
+                    disabled={relationship.isBlocked}
+                    className="w-full px-3.5 py-2.5 text-left text-sm font-medium text-on-surface hover:bg-surface-container flex items-center gap-2.5 disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-[18px] text-error">
+                      block
+                    </span>
+                    <span>{relationship.isBlocked ? 'Blocked' : 'Block'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      if (!currentUser) {
+                        setAuthModalOpen(true);
+                        return;
+                      }
+                      setReportModalError(null);
+                      setReportModalOpen(true);
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left text-sm font-medium text-error hover:bg-error-container/20 flex items-center gap-2.5"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">flag</span>
+                    <span>Report</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {showFollowBackToMessage && (
+          <p className="font-label-sm text-[11px] text-primary font-semibold">
+            Follow back to message
+          </p>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col w-full px-3 sm:px-margin pb-12 pt-2 space-y-space-md">
+      {/* Toast Notification */}
+      {actionToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-inverse-surface text-inverse-on-surface font-label-md text-label-md shadow-xl flex items-center gap-2">
+          <span className="material-symbols-outlined text-[18px] text-primary-fixed">
+            check_circle
+          </span>
+          <span>{actionToast}</span>
+        </div>
+      )}
+
       {/* Top Bar */}
       <div className="flex items-center justify-between gap-2">
         <button
@@ -321,24 +646,24 @@ export const PublicProfilePage: React.FC = () => {
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={followBusy}
-                  onClick={handleToggleFollow}
-                  className={`px-5 py-2 rounded-full font-label-md text-label-md font-semibold transition-colors shrink-0 disabled:opacity-60 ${
-                    isFollowing
-                      ? 'bg-surface-container text-on-surface hover:bg-surface-container-lowest'
-                      : 'bg-primary text-on-primary hover:opacity-95'
-                  }`}
-                >
-                  {followBusy ? '...' : isFollowing ? 'Unfollow' : 'Follow'}
-                </button>
+                {renderPersonActions(profile)}
               </div>
 
-              {followError && (
-                <p className="font-body-sm text-body-sm text-error px-1">
-                  {followError}
-                </p>
+              {(followError || relationshipError) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <p className="font-body-sm text-body-sm text-error">
+                    {followError || relationshipError}
+                  </p>
+                  {relationshipError && (
+                    <button
+                      type="button"
+                      onClick={() => loadRelationshipState(profile.id)}
+                      className="text-xs font-semibold text-primary underline"
+                    >
+                      Retry
+                    </button>
+                  )}
+                </div>
               )}
 
               <div className="p-8 rounded-3xl bg-surface-container-low border border-outline-variant/20 text-center flex flex-col items-center gap-2.5">
@@ -368,38 +693,35 @@ export const PublicProfilePage: React.FC = () => {
                           Private profile
                         </span>
                       )}
+                      {!isOwnProfile && relationship.followsMe && !relationship.isBlocked && (
+                        <span className="inline-flex items-center mt-1 px-2.5 py-0.5 rounded-full bg-surface-container text-on-surface-variant font-label-sm text-[11px] font-semibold">
+                          Follows you
+                        </span>
+                      )}
                     </div>
                   </div>
 
-                  {/* Follow/Unfollow or Edit profile button */}
+                  {/* Follow/Following/Message/More or Edit profile button */}
                   <div className="shrink-0">
-                    {isOwnProfile ? (
-                      <Link
-                        to="/profile"
-                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-secondary-container text-on-secondary-container font-label-md text-label-md font-semibold hover:opacity-95 transition-opacity"
-                      >
-                        <span className="material-symbols-outlined text-[17px]">edit</span>
-                        <span>Edit profile</span>
-                      </Link>
-                    ) : (
-                      <button
-                        type="button"
-                        disabled={followBusy}
-                        onClick={handleToggleFollow}
-                        className={`px-5 py-2 rounded-full font-label-md text-label-md font-semibold transition-colors disabled:opacity-60 ${
-                          isFollowing
-                            ? 'bg-surface-container text-on-surface hover:bg-surface-container-lowest'
-                            : 'bg-primary text-on-primary hover:opacity-95'
-                        }`}
-                      >
-                        {followBusy ? '...' : isFollowing ? 'Unfollow' : 'Follow'}
-                      </button>
-                    )}
+                    {renderPersonActions(profile)}
                   </div>
                 </div>
 
-                {followError && (
-                  <p className="font-body-sm text-body-sm text-error">{followError}</p>
+                {(followError || relationshipError) && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-body-sm text-body-sm text-error">
+                      {followError || relationshipError}
+                    </p>
+                    {relationshipError && (
+                      <button
+                        type="button"
+                        onClick={() => loadRelationshipState(profile.id)}
+                        className="text-xs font-semibold text-primary underline"
+                      >
+                        Retry
+                      </button>
+                    )}
+                  </div>
                 )}
 
                 {/* Bio */}
@@ -427,22 +749,30 @@ export const PublicProfilePage: React.FC = () => {
                       Scans
                     </p>
                   </div>
-                  <div className="p-2.5 rounded-2xl bg-surface-container-lowest">
+                  <button
+                    type="button"
+                    onClick={() => openFollowSheet('followers')}
+                    className="p-2.5 rounded-2xl bg-surface-container-lowest hover:bg-surface-container transition-colors cursor-pointer text-center focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
                     <span className="font-headline-sm text-headline-sm text-on-surface font-bold">
                       {profile.followersCount}
                     </span>
                     <p className="font-label-sm text-[11px] text-on-surface-variant">
                       Followers
                     </p>
-                  </div>
-                  <div className="p-2.5 rounded-2xl bg-surface-container-lowest">
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openFollowSheet('following')}
+                    className="p-2.5 rounded-2xl bg-surface-container-lowest hover:bg-surface-container transition-colors cursor-pointer text-center focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
                     <span className="font-headline-sm text-headline-sm text-on-surface font-bold">
                       {profile.followingCount}
                     </span>
                     <p className="font-label-sm text-[11px] text-on-surface-variant">
                       Following
                     </p>
-                  </div>
+                  </button>
                 </div>
               </div>
 
@@ -620,6 +950,156 @@ export const PublicProfilePage: React.FC = () => {
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Followers / Following Sheet */}
+          <FollowListSheet
+            open={followSheetOpen}
+            initialTab={followSheetTab}
+            targetUserId={profile.id}
+            targetUsername={profile.username}
+            currentUserId={currentUser?.id}
+            isOwner={isOwnProfile}
+            isPublic={profile.isPublic}
+            followersCount={profile.followersCount}
+            followingCount={profile.followingCount}
+            onClose={() => setFollowSheetOpen(false)}
+            onRequireAuth={() => {
+              setFollowSheetOpen(false);
+              setAuthModalOpen(true);
+            }}
+            onCountsDelta={handleCountsDelta}
+            onViewerFollowTargetChange={handleViewerFollowTargetChange}
+          />
+
+          {/* Confirm Block Dialog */}
+          {confirmBlockOpen && (
+            <div
+              className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+              role="alertdialog"
+              aria-modal="true"
+              aria-label={`Block ${profile.username}`}
+              onClick={() => {
+                if (!blockBusy) setConfirmBlockOpen(false);
+              }}
+            >
+              <div
+                className="w-full max-w-xs rounded-3xl bg-surface-container-lowest border border-outline-variant/30 p-5 shadow-2xl space-y-3 text-center"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="w-11 h-11 rounded-full bg-error-container/40 text-error flex items-center justify-center mx-auto">
+                  <span className="material-symbols-outlined text-[22px]">block</span>
+                </div>
+                <h3 className="font-headline-sm text-base font-bold text-on-surface">
+                  Block {profile.username}?
+                </h3>
+                <p className="font-body-sm text-xs text-on-surface-variant">
+                  They won&apos;t be able to follow or interact with your profile anymore.
+                </p>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    disabled={blockBusy}
+                    onClick={() => setConfirmBlockOpen(false)}
+                    className="flex-1 py-2 rounded-full bg-surface-container text-on-surface font-label-sm text-xs font-semibold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={blockBusy}
+                    onClick={handleConfirmBlock}
+                    className="flex-1 py-2 rounded-full bg-error text-on-error font-label-sm text-xs font-semibold disabled:opacity-60"
+                  >
+                    {blockBusy ? 'Blocking...' : 'Block'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Report User Dialog */}
+          {reportModalOpen && (
+            <div
+              className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] flex items-center justify-center p-4"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Report ${profile.username}`}
+              onClick={() => {
+                if (!reportBusy) setReportModalOpen(false);
+              }}
+            >
+              <form
+                onSubmit={handleSubmitReport}
+                className="w-full max-w-sm rounded-3xl bg-surface-container-lowest border border-outline-variant/30 p-5 shadow-2xl space-y-3.5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between">
+                  <h3 className="font-headline-sm text-base font-bold text-on-surface">
+                    Report {profile.username}
+                  </h3>
+                  <button
+                    type="button"
+                    disabled={reportBusy}
+                    onClick={() => setReportModalOpen(false)}
+                    aria-label="Close report dialog"
+                    className="w-8 h-8 rounded-full bg-surface-container flex items-center justify-center text-on-surface"
+                  >
+                    <span className="material-symbols-outlined text-[18px]">close</span>
+                  </button>
+                </div>
+
+                <div className="space-y-1.5">
+                  {REPORT_REASONS.map((reason) => (
+                    <label
+                      key={reason}
+                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-surface-container-low cursor-pointer hover:bg-surface-container transition-colors"
+                    >
+                      <input
+                        type="radio"
+                        name="report-reason"
+                        value={reason}
+                        checked={reportReason === reason}
+                        onChange={() => setReportReason(reason)}
+                        className="accent-primary"
+                      />
+                      <span className="font-body-sm text-xs text-on-surface">{reason}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <textarea
+                  value={reportNotes}
+                  onChange={(e) => setReportNotes(e.target.value)}
+                  placeholder="Optional details..."
+                  rows={2}
+                  maxLength={300}
+                  className="w-full px-3 py-2 rounded-xl bg-surface-container-low border border-outline-variant/30 text-sm text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/40"
+                />
+
+                {reportModalError && (
+                  <p className="font-body-sm text-xs text-error">{reportModalError}</p>
+                )}
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={reportBusy}
+                    onClick={() => setReportModalOpen(false)}
+                    className="px-4 py-2 rounded-full bg-surface-container text-on-surface font-label-sm text-xs font-semibold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={reportBusy}
+                    className="px-4 py-2 rounded-full bg-error text-on-error font-label-sm text-xs font-semibold disabled:opacity-60"
+                  >
+                    {reportBusy ? 'Submitting...' : 'Submit Report'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
         </>

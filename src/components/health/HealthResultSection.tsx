@@ -144,6 +144,7 @@ interface HealthResultSectionProps {
   subjectCategory: string;
   duration: string;
   onNotify: (message: string) => void;
+  extraActions?: React.ReactNode;
 }
 
 export const HealthResultSection: React.FC<HealthResultSectionProps> = ({
@@ -152,6 +153,7 @@ export const HealthResultSection: React.FC<HealthResultSectionProps> = ({
   subjectCategory,
   duration,
   onNotify,
+  extraActions,
 }) => {
   const [othersExpanded, setOthersExpanded] = useState(false);
 
@@ -235,8 +237,9 @@ export const HealthResultSection: React.FC<HealthResultSectionProps> = ({
         </div>
       )}
 
-      {/* Print or Save & Share Controls */}
+      {/* Print or Save, Share & Extra Controls */}
       <div className="flex flex-wrap items-center justify-end gap-2 print:hidden">
+        {extraActions}
         <button
           type="button"
           onClick={handlePrint}

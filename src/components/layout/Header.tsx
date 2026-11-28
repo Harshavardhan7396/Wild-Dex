@@ -1,6 +1,15 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import {
+  fetchUnreadTotal,
+  UNREAD_REFRESH_EVENT,
+} from '../../services/chatService';
+import {
+  CARE_REMINDERS_REFRESH_EVENT,
+  hasDueCareReminders,
+} from '../../services/careService';
 
 interface HeaderProps {
   title?: string;
@@ -11,7 +20,7 @@ export interface NavItem {
   to: string;
   label: string;
   icon: string;
-  tier: 'primary' | 'secondary' | 'more' | 'account';
+  tier: 'primary' | 'secondary' | 'more' | 'account' | 'drawer';
 }
 
 export const ALL_NAV_ITEMS: NavItem[] = [
@@ -21,8 +30,9 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   { to: '/health', label: 'Health Help', icon: 'healing', tier: 'primary' },
   { to: '/lifecycle', label: 'How It Grows', icon: 'timelapse', tier: 'secondary' },
   { to: '/collection', label: 'My Collection', icon: 'bookmarks', tier: 'secondary' },
+  { to: '/care', label: 'My Care', icon: 'yard', tier: 'secondary' },
   { to: '/feed', label: 'Community', icon: 'dynamic_feed', tier: 'secondary' },
-  { to: '/nearby', label: 'Nearby', icon: 'near_me', tier: 'more' },
+  { to: '/messages', label: 'Messages', icon: 'chat', tier: 'drawer' },
   { to: '/shared-collection', label: 'Shared Collection', icon: 'group_work', tier: 'more' },
   { to: '/leaderboard', label: 'Weekly Challenge', icon: 'trophy', tier: 'more' },
   { to: '/profile', label: 'Profile', icon: 'person', tier: 'account' },
@@ -41,10 +51,81 @@ export const Header: React.FC<HeaderProps> = ({
   const [moreOpen, setMoreOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [unreadTotal, setUnreadTotal] = useState(0);
+  const [hasCareDue, setHasCareDue] = useState(false);
   const moreDropdownRef = useRef<HTMLDivElement | null>(null);
   const avatarMenuRef = useRef<HTMLDivElement | null>(null);
   const hamburgerBtnRef = useRef<HTMLButtonElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const refreshUnreadCount = useCallback(async () => {
+    if (!currentUser) {
+      setUnreadTotal(0);
+      return;
+    }
+    const count = await fetchUnreadTotal();
+    setUnreadTotal(count);
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    refreshUnreadCount();
+  }, [refreshUnreadCount, location.pathname]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const handleUnreadEvent = () => {
+      refreshUnreadCount();
+    };
+    window.addEventListener(UNREAD_REFRESH_EVENT, handleUnreadEvent);
+
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    if (isSupabaseConfigured) {
+      channel = supabase
+        .channel(`header-unread-${currentUser.id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'messages' },
+          () => {
+            refreshUnreadCount();
+          }
+        )
+        .subscribe();
+    }
+
+    return () => {
+      window.removeEventListener(UNREAD_REFRESH_EVENT, handleUnreadEvent);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [currentUser?.id, refreshUnreadCount]);
+
+  const refreshCareDue = useCallback(async () => {
+    if (!currentUser) {
+      setHasCareDue(false);
+      return;
+    }
+    const due = await hasDueCareReminders();
+    setHasCareDue(due);
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    refreshCareDue();
+  }, [refreshCareDue, location.pathname]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const handleCareEvent = () => {
+      refreshCareDue();
+    };
+    window.addEventListener(CARE_REMINDERS_REFRESH_EVENT, handleCareEvent);
+    window.addEventListener('focus', handleCareEvent);
+    return () => {
+      window.removeEventListener(CARE_REMINDERS_REFRESH_EVENT, handleCareEvent);
+      window.removeEventListener('focus', handleCareEvent);
+    };
+  }, [currentUser?.id, refreshCareDue]);
 
   // Close dropdowns on outside click or Escape key
   useEffect(() => {
@@ -216,17 +297,24 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="hidden lg:flex items-center gap-3 xl:gap-4 shrink-0">
               {secondaryLinks.map((link) => {
                 const isActive = location.pathname.startsWith(link.to);
+                const showCareDot = link.to === '/care' && hasCareDue;
                 return (
                   <Link
                     key={link.to}
                     to={link.to}
-                    className={`relative py-1 whitespace-nowrap shrink-0 transition-colors flex items-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded ${
+                    className={`relative py-1 whitespace-nowrap shrink-0 transition-colors flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary rounded ${
                       isActive
                         ? 'text-primary font-bold'
                         : 'text-on-surface-variant hover:text-primary font-medium'
                     }`}
                   >
                     <span>{link.label}</span>
+                    {showCareDot && (
+                      <span
+                        className="w-2 h-2 rounded-full bg-error shrink-0"
+                        aria-label="Care reminder due"
+                      />
+                    )}
                     {isActive && (
                       <span className="absolute -bottom-1 inset-x-0 h-0.5 bg-primary rounded-full" />
                     )}
@@ -274,6 +362,7 @@ export const Header: React.FC<HeaderProps> = ({
                   {moreDropdownLinks.map((item) => {
                     const isActive = location.pathname.startsWith(item.to);
                     const hideOnLarge = item.tier === 'secondary' ? 'lg:hidden' : '';
+                    const showCareDot = item.to === '/care' && hasCareDue;
                     return (
                       <Link
                         key={item.to}
@@ -288,7 +377,13 @@ export const Header: React.FC<HeaderProps> = ({
                         <span className="material-symbols-outlined text-[18px] text-secondary" aria-hidden="true">
                           {item.icon}
                         </span>
-                        <span>{item.label}</span>
+                        <span className="flex-1">{item.label}</span>
+                        {showCareDot && (
+                          <span
+                            className="w-2 h-2 rounded-full bg-error shrink-0"
+                            aria-label="Care reminder due"
+                          />
+                        )}
                       </Link>
                     );
                   })}
@@ -297,21 +392,39 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </nav>
 
-          {/* GROUP 3: RIGHT (AI Scanner, Notification Bell, Avatar Menu) */}
-          <div className="flex items-center gap-1 sm:gap-2 md:gap-2.5 shrink-0">
+          {/* GROUP 3: RIGHT (AI Scanner, Messages, Notification Bell, Avatar Menu) */}
+          <div className="flex items-center gap-0.5 sm:gap-1.5 md:gap-2 shrink-0">
             <Link
               to="/scan"
               aria-label="AI Scanner"
-              className="inline-flex items-center justify-center gap-1 md:gap-1.5 min-h-[44px] md:min-h-0 px-2.5 md:px-3.5 py-1.5 rounded-full bg-tertiary text-on-tertiary font-label-md text-[11px] sm:text-label-md shadow-sm hover:opacity-95 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0 whitespace-nowrap"
+              className="inline-flex items-center justify-center gap-1 md:gap-1.5 min-h-[40px] md:min-h-0 px-2.5 md:px-3.5 py-1.5 rounded-full bg-tertiary text-on-tertiary font-label-md text-[11px] sm:text-label-md shadow-sm hover:opacity-95 active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0 whitespace-nowrap"
             >
               <span className="material-symbols-outlined text-[16px] md:text-[18px]" aria-hidden="true">
                 document_scanner
               </span>
               <span>AI Scanner</span>
             </Link>
+            <Link
+              to="/messages"
+              aria-label={unreadTotal > 0 ? `Messages (${unreadTotal} unread)` : 'Messages'}
+              className={`relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-surface-container active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0 ${
+                location.pathname.startsWith('/messages')
+                  ? 'text-primary bg-surface-container/60'
+                  : 'text-on-surface-variant hover:text-on-surface'
+              }`}
+            >
+              <span className="material-symbols-outlined text-[21px]" aria-hidden="true">
+                chat_bubble_outline
+              </span>
+              {unreadTotal > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-on-primary text-[10px] font-bold flex items-center justify-center ring-2 ring-surface">
+                  {unreadTotal > 99 ? '99+' : unreadTotal}
+                </span>
+              )}
+            </Link>
             <button
               aria-label="Notifications"
-              className="relative w-11 h-11 min-w-[44px] min-h-[44px] md:w-10 md:h-10 md:min-w-0 md:min-h-0 flex items-center justify-center rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0"
+              className="relative w-10 h-10 flex items-center justify-center rounded-full text-on-surface-variant hover:text-on-surface hover:bg-surface-container active:scale-95 transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface shrink-0"
               type="button"
               onClick={() => {}}
             >
@@ -507,16 +620,37 @@ export const Header: React.FC<HeaderProps> = ({
                   tabIndex={mobileMenuOpen ? 0 : -1}
                   aria-current={isActive ? 'page' : undefined}
                   onClick={() => setMobileMenuOpen(false)}
-                  className={`flex items-center gap-3 px-3.5 py-2.5 min-h-[44px] rounded-xl font-label-md text-label-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
+                  className={`flex items-center justify-between gap-3 px-3.5 py-2.5 min-h-[44px] rounded-xl font-label-md text-label-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface ${
                     isActive
                       ? 'bg-primary text-on-primary font-bold shadow-sm'
                       : 'text-on-surface hover:bg-surface-container'
                   }`}
                 >
-                  <span className="material-symbols-outlined text-[20px] shrink-0" aria-hidden="true">
-                    {item.icon}
+                  <span className="flex items-center gap-3 min-w-0">
+                    <span className="material-symbols-outlined text-[20px] shrink-0" aria-hidden="true">
+                      {item.icon}
+                    </span>
+                    <span className="truncate">{item.label}</span>
                   </span>
-                  <span className="truncate">{item.label}</span>
+                  {item.to === '/care' && hasCareDue && (
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        isActive ? 'bg-error-container' : 'bg-error'
+                      }`}
+                      aria-label="Care reminder due"
+                    />
+                  )}
+                  {item.to === '/messages' && unreadTotal > 0 && (
+                    <span
+                      className={`min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 ${
+                        isActive
+                          ? 'bg-on-primary text-primary'
+                          : 'bg-primary text-on-primary'
+                      }`}
+                    >
+                      {unreadTotal > 99 ? '99+' : unreadTotal}
+                    </span>
+                  )}
                 </Link>
               );
             })}

@@ -14,6 +14,15 @@ import {
 } from '../services/supabaseCollectionService';
 import { ForYouSpeciesCard } from '../components/home/ForYouSpeciesCard';
 import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
+import {
+  CARE_REMINDERS_REFRESH_EVENT,
+  DueCareReminderItem,
+  completeCareReminder,
+  formatEntryDate,
+  getReminderStatus,
+  getReminderTypeMeta,
+  listDueCareRemindersAcrossSubjects,
+} from '../services/careService';
 
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
@@ -47,6 +56,17 @@ export const HomePage: React.FC = () => {
   const [addingTaxonId, setAddingTaxonId] = useState<number | null>(null);
   const [addedSciNames, setAddedSciNames] = useState<Set<string>>(new Set());
 
+  // "Today's care" due/overdue reminders state
+  const [dueCareReminders, setDueCareReminders] = useState<DueCareReminderItem[]>([]);
+  const [dueCareLoading, setDueCareLoading] = useState(false);
+  const [dueCareLoadedOnce, setDueCareLoadedOnce] = useState(false);
+  const [dueCareError, setDueCareError] = useState<string | null>(null);
+  const [completingReminderId, setCompletingReminderId] = useState<string | null>(null);
+  const [careActionError, setCareActionError] = useState<{
+    message: string;
+    reminder: DueCareReminderItem;
+  } | null>(null);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
@@ -73,24 +93,12 @@ export const HomePage: React.FC = () => {
     currentUser?.id,
     userProfile?.interests,
     userProfile?.favoriteSpecies,
-    userProfile?.locationConsent,
-    userProfile?.homeLat,
-    userProfile?.homeLng,
   ]);
 
   const effectivePrivate = currentUser ? privateData ?? userProfile : null;
   const interests = effectivePrivate?.interests ?? [];
   const favorites = effectivePrivate?.favoriteSpecies ?? [];
   const notInterestedIds = userProfile?.notInterestedIds ?? [];
-  const hasLocation = Boolean(
-    effectivePrivate?.locationConsent &&
-      effectivePrivate?.homeLat !== null &&
-      effectivePrivate?.homeLat !== undefined &&
-      effectivePrivate?.homeLng !== null &&
-      effectivePrivate?.homeLng !== undefined
-  );
-  const homeLat = hasLocation ? effectivePrivate?.homeLat ?? null : null;
-  const homeLng = hasLocation ? effectivePrivate?.homeLng ?? null : null;
 
   const interestsKey = interests.join('|');
   const favoritesKey = favorites
@@ -124,7 +132,66 @@ export const HomePage: React.FC = () => {
     };
   }, [currentUser?.id]);
 
-  // Fetch "For You" species (with or without home location)
+  // Load "Today's care" due or overdue reminders across all non-archived subjects
+  const loadDueCareReminders = useCallback(async () => {
+    if (!currentUser?.id) {
+      setDueCareReminders([]);
+      setDueCareError(null);
+      setDueCareLoading(false);
+      setDueCareLoadedOnce(false);
+      return;
+    }
+
+    setDueCareLoading(true);
+    setDueCareError(null);
+    try {
+      const items = await listDueCareRemindersAcrossSubjects();
+      setDueCareReminders(items);
+    } catch (err: any) {
+      setDueCareError(err?.message || "Could not load today's care reminders.");
+    } finally {
+      setDueCareLoading(false);
+      setDueCareLoadedOnce(true);
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    loadDueCareReminders();
+  }, [loadDueCareReminders]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    const handleRefresh = () => {
+      loadDueCareReminders();
+    };
+    window.addEventListener(CARE_REMINDERS_REFRESH_EVENT, handleRefresh);
+    return () => {
+      window.removeEventListener(CARE_REMINDERS_REFRESH_EVENT, handleRefresh);
+    };
+  }, [currentUser?.id, loadDueCareReminders]);
+
+  const handleCompleteDueCare = useCallback(
+    async (reminder: DueCareReminderItem) => {
+      if (completingReminderId) return;
+      setCompletingReminderId(reminder.id);
+      setCareActionError(null);
+      try {
+        await completeCareReminder(reminder.id);
+        await loadDueCareReminders();
+        showToast(`Done! Logged "${reminder.title}" for ${reminder.subjectName}.`);
+      } catch (err: any) {
+        setCareActionError({
+          message: err?.message || 'Could not mark reminder done.',
+          reminder,
+        });
+      } finally {
+        setCompletingReminderId(null);
+      }
+    },
+    [completingReminderId, loadDueCareReminders]
+  );
+
+  // Fetch "For You" species worldwide
   useEffect(() => {
     const controller = new AbortController();
     let active = true;
@@ -135,9 +202,6 @@ export const HomePage: React.FC = () => {
       try {
         const items = await fetchForYouSpecies({
           interests,
-          lat: homeLat,
-          lng: homeLng,
-          hasLocation,
           forceRefresh: forYouForceRefresh,
           signal: controller.signal,
         });
@@ -161,7 +225,7 @@ export const HomePage: React.FC = () => {
       active = false;
       controller.abort();
     };
-  }, [interestsKey, hasLocation, homeLat, homeLng, forYouRefreshTick]);
+  }, [interestsKey, forYouRefreshTick]);
 
   // Fetch "Similar to your favorites" using iNaturalist taxa API (same genus or family)
   useEffect(() => {
@@ -329,7 +393,7 @@ export const HomePage: React.FC = () => {
               className="inline-flex items-center gap-1.5 px-3 min-h-[40px] rounded-full bg-surface-container hover:bg-surface-container-high text-primary font-label-sm text-label-sm font-semibold shrink-0 transition-colors"
             >
               <span className="material-symbols-outlined text-[16px]">tune</span>
-              <span>Edit interests &amp; area</span>
+              <span>Edit interests &amp; favorites</span>
             </Link>
           )}
         </div>
@@ -357,33 +421,178 @@ export const HomePage: React.FC = () => {
         </form>
       </section>
 
+      {/* TODAY'S CARE CARD (shown only when loading, errored, or there are due/overdue reminders) */}
+      {currentUser &&
+        ((dueCareLoading && !dueCareLoadedOnce) ||
+          Boolean(dueCareError) ||
+          dueCareReminders.length > 0) && (
+          <section
+            aria-label="Today's care"
+            className="px-3 sm:px-margin py-space-xs"
+          >
+            {dueCareLoading && !dueCareLoadedOnce ? (
+              <div className="p-4 rounded-3xl bg-surface-container-low border border-outline-variant/25 space-y-3 animate-pulse">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="h-5 w-36 rounded bg-surface-container-high" />
+                  <div className="h-4 w-16 rounded bg-surface-container-high" />
+                </div>
+                <div className="h-14 rounded-2xl bg-surface-container-high" />
+              </div>
+            ) : dueCareError ? (
+              <div className="p-4 rounded-2xl bg-error-container/25 border border-error/40 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  <span className="material-symbols-outlined text-[20px] text-error shrink-0 mt-0.5">
+                    error
+                  </span>
+                  <p className="font-body-sm text-body-sm text-error">
+                    {dueCareError}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadDueCareReminders}
+                  className="px-4 min-h-[40px] rounded-full bg-error text-on-error font-label-md text-xs font-bold shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <div className="p-4 sm:p-5 rounded-3xl bg-surface-container-lowest border border-outline-variant/25 shadow-sm space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-secondary-container/50 text-primary flex items-center justify-center shrink-0">
+                      <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
+                        yard
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h2 className="font-headline-sm text-base sm:text-lg font-bold text-primary">
+                          Today&apos;s care
+                        </h2>
+                        <span className="px-2 py-0.5 rounded-full bg-error/15 text-error text-[11px] font-bold">
+                          {dueCareReminders.length}
+                        </span>
+                      </div>
+                      <p className="text-xs text-on-surface-variant">
+                        Reminders show when you open WildDex. Notifications are coming later.
+                      </p>
+                    </div>
+                  </div>
+
+                  <Link
+                    to="/care"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 min-h-[36px] rounded-full bg-surface-container-low hover:bg-surface-container text-primary font-label-sm text-xs font-semibold shrink-0"
+                  >
+                    <span>My Care</span>
+                    <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                      chevron_right
+                    </span>
+                  </Link>
+                </div>
+
+                {careActionError && (
+                  <div className="p-3 rounded-xl bg-error-container/25 border border-error/35 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs text-on-error-container font-medium">
+                      {careActionError.message}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={Boolean(completingReminderId)}
+                      onClick={() => handleCompleteDueCare(careActionError.reminder)}
+                      className="px-3 py-1 rounded-full bg-surface text-primary text-xs font-semibold border border-outline-variant/40 shrink-0"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  {dueCareReminders.map((rem) => {
+                    const { status, label } = getReminderStatus(rem.nextDue);
+                    const tMeta = getReminderTypeMeta(rem.kind);
+                    const isBusy = completingReminderId === rem.id;
+                    const badgeClasses =
+                      status === 'overdue'
+                        ? 'bg-red-500/15 text-red-700 dark:text-red-300 border border-red-500/35'
+                        : 'bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/35';
+
+                    return (
+                      <div
+                        key={rem.id}
+                        className="p-3 rounded-2xl bg-surface-container-low/70 border border-outline-variant/20 flex flex-wrap sm:flex-nowrap items-center justify-between gap-2.5"
+                      >
+                        <Link
+                          to={`/care/${rem.subjectId}`}
+                          className="flex items-center gap-3 min-w-0 flex-1 group"
+                        >
+                          <div
+                            className="w-9 h-9 rounded-xl bg-surface-container-lowest border border-outline-variant/25 text-primary flex items-center justify-center shrink-0"
+                            aria-hidden="true"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">
+                              {tMeta.icon}
+                            </span>
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-label-md text-sm font-bold text-on-surface group-hover:text-primary transition-colors truncate">
+                                {rem.title}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wide shrink-0 ${badgeClasses}`}
+                              >
+                                {label}
+                              </span>
+                            </div>
+                            <p className="text-xs text-on-surface-variant truncate mt-0.5">
+                              {rem.subjectName}
+                              {status === 'overdue'
+                                ? ` · Was due ${formatEntryDate(rem.nextDue)}`
+                                : ' · Due today'}
+                            </p>
+                          </div>
+                        </Link>
+
+                        <button
+                          type="button"
+                          disabled={Boolean(completingReminderId)}
+                          onClick={() => handleCompleteDueCare(rem)}
+                          className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 min-h-[38px] rounded-full bg-primary text-on-primary font-label-md text-xs font-semibold shadow-sm hover:opacity-95 disabled:opacity-60 shrink-0 ml-auto"
+                        >
+                          <span
+                            className={`material-symbols-outlined text-[16px] ${
+                              isBusy ? 'animate-spin' : ''
+                            }`}
+                            aria-hidden="true"
+                          >
+                            {isBusy ? 'progress_activity' : 'check_circle'}
+                          </span>
+                          <span>{isBusy ? 'Saving...' : 'Mark done'}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+
       {/* FOR YOU SECTION */}
       <section className="px-3 sm:px-margin py-space-sm flex flex-col gap-3">
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div className="flex flex-col min-w-0">
             <h2 className="font-headline-sm text-headline-sm text-primary font-bold flex items-center gap-1.5">
               <span>For You</span>
-              <span className="material-symbols-outlined text-[20px] text-secondary">
-                {hasLocation ? 'location_on' : 'public'}
-              </span>
+              <span className="material-symbols-outlined text-[20px] text-secondary">public</span>
             </h2>
             <p className="font-body-sm text-body-sm text-on-surface-variant">
-              {hasLocation
-                ? 'Seen near you (within 50 km) from your chosen groups'
-                : 'Popular species worldwide in your chosen groups'}
+              Popular species worldwide in your chosen groups
             </p>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {!hasLocation && currentUser && (
-              <Link
-                to="/onboarding?edit=1"
-                className="px-3 min-h-[36px] rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-label-sm font-bold inline-flex items-center gap-1 hover:opacity-95"
-              >
-                <span className="material-symbols-outlined text-[15px]">add_location</span>
-                <span>Add area</span>
-              </Link>
-            )}
             <button
               type="button"
               onClick={() => {
@@ -467,7 +676,7 @@ export const HomePage: React.FC = () => {
               <p className="font-body-sm text-body-sm text-on-surface-variant">
                 {forYouItems.length > 0 && dismissedSet.size > 0
                   ? 'You hid all current matches for your groups.'
-                  : 'Try picking more groups or updating your area to see more local wildlife.'}
+                  : 'Try picking more groups to see more wildlife.'}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-2">
@@ -484,7 +693,7 @@ export const HomePage: React.FC = () => {
                 to={currentUser ? '/onboarding?edit=1' : '/explore'}
                 className="px-4 min-h-[44px] rounded-full bg-primary text-on-primary font-label-md text-label-md font-bold inline-flex items-center gap-1.5"
               >
-                <span>{currentUser ? 'Edit interests & area' : 'Browse Explore'}</span>
+                <span>{currentUser ? 'Edit interests & favorites' : 'Browse Explore'}</span>
               </Link>
             </div>
           </div>

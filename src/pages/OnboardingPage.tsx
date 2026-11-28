@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth, FavoriteSpeciesItem } from '../contexts/AuthContext';
 import { fetchMyUserPrivate } from '../services/userPrivateService';
@@ -159,17 +159,6 @@ const InterestPicture: React.FC<{ subject: string; label: string; icon: string }
   );
 };
 
-function roundCoord(val: number): number {
-  return Math.round(val * 100) / 100;
-}
-
-interface NominatimPlace {
-  place_id: number;
-  display_name: string;
-  lat: string;
-  lon: string;
-}
-
 interface OnboardingPageProps {
   fullScreen?: boolean;
 }
@@ -180,7 +169,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
   const { userProfile, saveOnboardingPreferences } = useAuth();
   const isEditMode = searchParams.get('edit') === '1';
 
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
   const [selectedInterests, setSelectedInterests] = useState<string[]>(
     () => userProfile?.interests ?? []
   );
@@ -194,38 +183,6 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
   const [speciesLoading, setSpeciesLoading] = useState(false);
   const [speciesError, setSpeciesError] = useState<string | null>(null);
   const [speciesRetryTick, setSpeciesRetryTick] = useState(0);
-
-  // Step 3 Location state
-  const [locationConsent, setLocationConsent] = useState<boolean>(
-    () => Boolean(userProfile?.locationConsent && userProfile?.homeLat != null && userProfile?.homeLng != null)
-  );
-  const [homeLat, setHomeLat] = useState<number | null>(
-    () => userProfile?.homeLat ?? null
-  );
-  const [homeLng, setHomeLng] = useState<number | null>(
-    () => userProfile?.homeLng ?? null
-  );
-  const [homeLabel, setHomeLabel] = useState<string>(
-    () => userProfile?.homeLabel ?? ''
-  );
-  const [areaLabel, setAreaLabel] = useState<string>(() =>
-    userProfile?.homeLat != null && userProfile?.homeLng != null
-      ? userProfile.homeLabel
-        ? `${userProfile.homeLabel} (~${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)})`
-        : `Near ${userProfile.homeLat.toFixed(2)}, ${userProfile.homeLng.toFixed(2)}`
-      : ''
-  );
-  const [showCitySearch, setShowCitySearch] = useState(false);
-  const [geoLoading, setGeoLoading] = useState(false);
-  const [geoError, setGeoError] = useState<string | null>(null);
-
-  // Nominatim search with 1 req/sec rate limit + debounce
-  const [cityQuery, setCityQuery] = useState('');
-  const [cityResults, setCityResults] = useState<NominatimPlace[]>([]);
-  const [cityLoading, setCityLoading] = useState(false);
-  const [cityError, setCityError] = useState<string | null>(null);
-  const [cityRetryTick, setCityRetryTick] = useState(0);
-  const lastNominatimAtRef = useRef<number>(0);
 
   // Save state
   const [saving, setSaving] = useState(false);
@@ -242,22 +199,6 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
         const source = priv ?? userProfile;
         setSelectedInterests(source.interests || []);
         setFavoriteSpecies(source.favoriteSpecies || []);
-        const hasCoords =
-          Boolean(source.locationConsent) &&
-          source.homeLat != null &&
-          source.homeLng != null;
-        setLocationConsent(hasCoords);
-        setHomeLat(source.homeLat ?? null);
-        setHomeLng(source.homeLng ?? null);
-        const label = hasCoords ? source.homeLabel || '' : '';
-        setHomeLabel(label);
-        setAreaLabel(
-          hasCoords && source.homeLat != null && source.homeLng != null
-            ? label
-              ? `${label} (~${source.homeLat.toFixed(2)}, ${source.homeLng.toFixed(2)})`
-              : `Near ${source.homeLat.toFixed(2)}, ${source.homeLng.toFixed(2)}`
-            : ''
-        );
       })
       .catch((err) => {
         console.warn('Could not load user_private in edit mode:', err);
@@ -321,66 +262,6 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
     };
   }, [speciesQuery, speciesRetryTick]);
 
-  // Step 3: Nominatim search with debounce + strict max 1 request per second
-  useEffect(() => {
-    const trimmed = cityQuery.trim();
-    if (!showCitySearch || trimmed.length < 2) {
-      setCityResults([]);
-      setCityLoading(false);
-      setCityError(null);
-      return;
-    }
-
-    let cancelled = false;
-    const controller = new AbortController();
-
-    const now = Date.now();
-    const elapsedSinceLast = now - lastNominatimAtRef.current;
-    const rateDelay = Math.max(0, 1000 - elapsedSinceLast);
-    const waitMs = Math.max(400, rateDelay);
-
-    const timer = setTimeout(async () => {
-      if (cancelled) return;
-      setCityLoading(true);
-      setCityError(null);
-      lastNominatimAtRef.current = Date.now();
-
-      try {
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
-          trimmed
-        )}&limit=5`;
-        const res = await fetch(url, {
-          signal: controller.signal,
-          headers: {
-            Accept: 'application/json',
-          },
-        });
-        if (!res.ok) {
-          throw new Error(`Location search failed (${res.status})`);
-        }
-        const data = await res.json();
-        if (!cancelled) {
-          setCityResults(Array.isArray(data) ? data : []);
-        }
-      } catch (err: any) {
-        if (err?.name === 'AbortError' || cancelled) return;
-        console.error('Nominatim location search error:', err);
-        setCityError(err?.message || 'Could not search places right now. Please try again.');
-        setCityResults([]);
-      } finally {
-        if (!cancelled && !controller.signal.aborted) {
-          setCityLoading(false);
-        }
-      }
-    }, waitMs);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [cityQuery, showCitySearch, cityRetryTick]);
-
   const toggleInterest = (id: string) => {
     setSaveError(null);
     setSelectedInterests((prev) =>
@@ -417,110 +298,19 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
     setFavoriteSpecies((prev) => [...prev, item]);
   };
 
-  const handleUseMyLocation = () => {
-    setGeoError(null);
-    setSaveError(null);
-
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      setGeoError('Location is not supported in this browser. Try typing a city or area instead.');
-      return;
-    }
-
-    setGeoLoading(true);
-    try {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          try {
-            const roundedLat = roundCoord(position.coords.latitude);
-            const roundedLng = roundCoord(position.coords.longitude);
-            setHomeLat(roundedLat);
-            setHomeLng(roundedLng);
-            setHomeLabel('');
-            setLocationConsent(true);
-            setAreaLabel(`Near ${roundedLat.toFixed(2)}, ${roundedLng.toFixed(2)}`);
-            setShowCitySearch(false);
-          } catch (err: any) {
-            setGeoError(err?.message || 'Could not read your location.');
-          } finally {
-            setGeoLoading(false);
-          }
-        },
-        (err) => {
-          console.error('Geolocation error:', err);
-          if (err.code === err.PERMISSION_DENIED) {
-            setGeoError('Location access was denied. You can type your city or skip for now.');
-          } else if (err.code === err.TIMEOUT) {
-            setGeoError('Location request timed out. Please retry or type your city.');
-          } else {
-            setGeoError('Could not detect your location. Please retry or type your city.');
-          }
-          setGeoLoading(false);
-        },
-        { enableHighAccuracy: false, timeout: 12000, maximumAge: 60000 }
-      );
-    } catch (err: any) {
-      console.error('Geolocation exception:', err);
-      setGeoError(err?.message || 'Could not detect your location.');
-      setGeoLoading(false);
-    }
-  };
-
-  const handleSelectNominatimPlace = (place: NominatimPlace) => {
-    setSaveError(null);
-    setGeoError(null);
-    const latNum = Number(place.lat);
-    const lngNum = Number(place.lon);
-    if (Number.isNaN(latNum) || Number.isNaN(lngNum)) {
-      setCityError('Selected place did not include valid coordinates.');
-      return;
-    }
-    const roundedLat = roundCoord(latNum);
-    const roundedLng = roundCoord(lngNum);
-    const shortName = place.display_name.split(',').slice(0, 2).join(', ').trim();
-    setHomeLat(roundedLat);
-    setHomeLng(roundedLng);
-    setHomeLabel(shortName);
-    setLocationConsent(true);
-    setAreaLabel(`${shortName} (~${roundedLat.toFixed(2)}, ${roundedLng.toFixed(2)})`);
-    setCityResults([]);
-    setCityQuery('');
-    setShowCitySearch(false);
-  };
-
-  const handleRemoveLocation = () => {
-    setLocationConsent(false);
-    setHomeLat(null);
-    setHomeLng(null);
-    setHomeLabel('');
-    setAreaLabel('');
-    setGeoError(null);
-    setCityError(null);
-  };
-
-  const persistAndFinish = async (overrideSkipLocation = false) => {
+  const persistAndFinish = async () => {
     setSaving(true);
     setSaveError(null);
-
-    if (overrideSkipLocation) {
-      handleRemoveLocation();
-    }
-
-    const finalConsent = overrideSkipLocation
-      ? false
-      : Boolean(locationConsent && homeLat !== null && homeLng !== null);
-    const finalLat = finalConsent && homeLat !== null ? roundCoord(homeLat) : null;
-    const finalLng = finalConsent && homeLng !== null ? roundCoord(homeLng) : null;
-    const finalLabel = finalConsent ? homeLabel : '';
 
     try {
       await saveOnboardingPreferences({
         interests: selectedInterests,
         favoriteSpecies,
         onboardingDone: true,
-        locationConsent: finalConsent,
-        homeLat: finalLat,
-        homeLng: finalLng,
-        homeLabel: finalLabel,
+        locationConsent: false,
+        homeLat: null,
+        homeLng: null,
+        homeLabel: '',
       });
 
       let pendingJoinCode = '';
@@ -555,7 +345,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
     }
   }
 
-  const progressPct = currentStep === 1 ? 33 : currentStep === 2 ? 66 : 100;
+  const progressPct = currentStep === 1 ? 50 : 100;
 
   return (
     <div
@@ -578,10 +368,10 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
               </div>
               <div className="min-w-0">
                 <p className="font-headline-sm text-headline-sm text-primary font-bold truncate">
-                  {isEditMode ? 'Edit my interests and location' : 'Welcome to WildDex'}
+                  {isEditMode ? 'Edit my interests & favorites' : 'Welcome to WildDex'}
                 </p>
                 <p className="font-label-sm text-label-sm text-on-surface-variant">
-                  Step {currentStep} of 3
+                  Step {currentStep} of 2
                 </p>
               </div>
             </div>
@@ -697,8 +487,9 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
               </div>
               <button
                 type="button"
-                onClick={() => setCurrentStep(3)}
-                className="px-4 min-h-[40px] rounded-full bg-surface-container hover:bg-surface-container-high text-primary font-label-md text-label-md font-semibold shrink-0"
+                disabled={saving}
+                onClick={persistAndFinish}
+                className="px-4 min-h-[40px] rounded-full bg-surface-container hover:bg-surface-container-high text-primary font-label-md text-label-md font-semibold shrink-0 disabled:opacity-50"
               >
                 Skip
               </button>
@@ -907,194 +698,6 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
           </div>
         )}
 
-        {/* STEP 3: Find wildlife near you */}
-        {currentStep === 3 && (
-          <div className="flex-1 flex flex-col space-y-4">
-            <div className="space-y-1.5">
-              <h1 className="font-headline-lg text-[24px] sm:text-[28px] text-on-surface font-bold leading-tight">
-                Find wildlife near you
-              </h1>
-              <p className="font-body-md text-body-md text-on-surface-variant leading-relaxed">
-                Sharing your general area helps us show plants, birds, and animals that live near you.
-              </p>
-              <div className="inline-flex items-start gap-2 bg-surface-container rounded-xl p-3 text-on-surface-variant">
-                <span className="material-symbols-outlined text-[18px] text-secondary shrink-0 mt-0.5">
-                  lock
-                </span>
-                <p className="font-body-sm text-body-sm leading-relaxed">
-                  Your location is optional, rounded to about 1 km for privacy, and never shown publicly.
-                </p>
-              </div>
-            </div>
-
-            {/* Selected Location Card */}
-            {locationConsent && homeLat !== null && homeLng !== null && (
-              <div className="p-3.5 rounded-2xl bg-secondary-container/30 border border-secondary/40 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-full bg-secondary text-on-secondary flex items-center justify-center shrink-0">
-                    <span className="material-symbols-outlined text-[20px]">location_on</span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-label-lg text-label-lg font-bold text-on-surface">
-                      Home area saved
-                    </p>
-                    <p className="font-body-sm text-body-sm text-on-surface-variant truncate">
-                      {areaLabel || `Near ${homeLat.toFixed(2)}, ${homeLng.toFixed(2)}`}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleRemoveLocation}
-                  className="px-3.5 min-h-[40px] rounded-full bg-error-container text-on-error-container font-label-sm text-label-sm font-bold shrink-0"
-                >
-                  Delete location
-                </button>
-              </div>
-            )}
-
-            {/* Two Primary Location Options */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <button
-                type="button"
-                disabled={geoLoading}
-                onClick={handleUseMyLocation}
-                className="min-h-[52px] px-4 py-3 rounded-2xl bg-primary text-on-primary font-label-lg text-label-lg font-bold flex items-center justify-center gap-2 shadow-sm hover:bg-primary-container active:scale-[0.99] transition-all disabled:opacity-60"
-              >
-                <span
-                  className={`material-symbols-outlined text-[20px] ${
-                    geoLoading ? 'animate-spin' : ''
-                  }`}
-                >
-                  {geoLoading ? 'progress_activity' : 'my_location'}
-                </span>
-                <span>{geoLoading ? 'Finding location...' : 'Use my location'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setShowCitySearch(true);
-                  setGeoError(null);
-                }}
-                className="min-h-[52px] px-4 py-3 rounded-2xl bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-label-lg text-label-lg font-semibold flex items-center justify-center gap-2 transition-colors"
-              >
-                <span className="material-symbols-outlined text-[20px] text-primary">edit_location_alt</span>
-                <span>Type a city or area instead</span>
-              </button>
-            </div>
-
-            {/* Geolocation Error Box */}
-            {geoError && (
-              <div className="p-3.5 rounded-2xl bg-error-container/25 border border-error/40 flex flex-wrap items-center justify-between gap-2">
-                <p className="font-body-sm text-body-sm text-error flex-1 min-w-0">{geoError}</p>
-                <button
-                  type="button"
-                  onClick={handleUseMyLocation}
-                  className="px-4 min-h-[40px] rounded-full bg-error text-on-error font-label-md text-label-md font-semibold shrink-0"
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-
-            {/* City/Area Search Box (Nominatim API) */}
-            {showCitySearch && (
-              <div className="bg-surface-container-low rounded-2xl p-3.5 space-y-3 border border-outline-variant/30">
-                <label
-                  htmlFor="onboarding-city-input"
-                  className="block font-label-md text-label-md font-semibold text-on-surface"
-                >
-                  Search city, town, or neighborhood
-                </label>
-                <div className="relative">
-                  <span className="material-symbols-outlined absolute left-3.5 top-1/2 -translate-y-1/2 text-[20px] text-on-surface-variant pointer-events-none">
-                    search
-                  </span>
-                  <input
-                    id="onboarding-city-input"
-                    type="text"
-                    value={cityQuery}
-                    onChange={(e) => setCityQuery(e.target.value)}
-                    placeholder="e.g. Portland, Oregon"
-                    className="w-full min-w-0 min-h-[46px] bg-surface-container pl-10 pr-10 py-2 rounded-full font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  />
-                  {cityQuery && (
-                    <button
-                      type="button"
-                      onClick={() => setCityQuery('')}
-                      aria-label="Clear city search"
-                      className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high"
-                    >
-                      <span className="material-symbols-outlined text-[18px]">close</span>
-                    </button>
-                  )}
-                </div>
-
-                {cityLoading && (
-                  <div className="flex items-center gap-2 py-2 font-body-sm text-body-sm text-on-surface-variant">
-                    <span className="material-symbols-outlined text-[18px] animate-spin text-primary">
-                      progress_activity
-                    </span>
-                    <span>Looking up places...</span>
-                  </div>
-                )}
-
-                {!cityLoading && cityError && (
-                  <div className="p-3 rounded-xl bg-error-container/25 border border-error/40 flex flex-wrap items-center justify-between gap-2">
-                    <p className="font-body-sm text-body-sm text-error">{cityError}</p>
-                    <button
-                      type="button"
-                      onClick={() => setCityRetryTick((t) => t + 1)}
-                      className="px-3.5 min-h-[38px] rounded-full bg-error text-on-error font-label-sm text-label-sm font-semibold shrink-0"
-                    >
-                      Retry
-                    </button>
-                  </div>
-                )}
-
-                {!cityLoading && !cityError && cityQuery.trim().length >= 2 && (
-                  <div className="space-y-1.5">
-                    {cityResults.length === 0 ? (
-                      <p className="font-body-sm text-body-sm text-on-surface-variant py-1">
-                        No matching city or area found. Try another name.
-                      </p>
-                    ) : (
-                      cityResults.map((place) => (
-                        <button
-                          key={place.place_id}
-                          type="button"
-                          onClick={() => handleSelectNominatimPlace(place)}
-                          className="w-full p-2.5 min-h-[44px] rounded-xl bg-surface-container hover:bg-surface-container-high text-left flex items-start gap-2.5 transition-colors"
-                        >
-                          <span className="material-symbols-outlined text-[18px] text-primary shrink-0 mt-0.5">
-                            location_on
-                          </span>
-                          <span className="font-body-sm text-body-sm text-on-surface break-words">
-                            {place.display_name}
-                          </span>
-                        </button>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Skip for now button */}
-            <div className="pt-1">
-              <button
-                type="button"
-                disabled={saving}
-                onClick={() => persistAndFinish(true)}
-                className="w-full min-h-[44px] rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface-variant font-label-md text-label-md font-semibold transition-colors disabled:opacity-50"
-              >
-                Skip for now
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Save Error Banner with Retry */}
         {saveError && (
           <div className="mt-4 p-3.5 rounded-2xl bg-error-container/25 border border-error/40 flex flex-wrap items-center justify-between gap-2">
@@ -1106,7 +709,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
             </div>
             <button
               type="button"
-              onClick={() => persistAndFinish(false)}
+              onClick={persistAndFinish}
               className="px-4 min-h-[40px] rounded-full bg-error text-on-error font-label-md text-label-md font-semibold shrink-0"
             >
               Retry
@@ -1122,7 +725,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
               disabled={saving}
               onClick={() => {
                 setSaveError(null);
-                setCurrentStep((prev) => (prev === 3 ? 2 : 1));
+                setCurrentStep(1);
               }}
               className="px-5 min-h-[48px] rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-lg text-label-lg font-semibold flex items-center justify-center gap-1.5 active:scale-95 transition-all disabled:opacity-50"
             >
@@ -1131,13 +734,13 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
             </button>
           )}
 
-          {currentStep < 3 ? (
+          {currentStep === 1 ? (
             <button
               type="button"
-              disabled={currentStep === 1 && selectedInterests.length === 0}
+              disabled={selectedInterests.length === 0}
               onClick={() => {
                 setSaveError(null);
-                setCurrentStep((prev) => (prev === 1 ? 2 : 3));
+                setCurrentStep(2);
               }}
               className="flex-1 min-h-[48px] rounded-full bg-primary hover:bg-primary-container text-on-primary font-label-lg text-label-lg font-bold flex items-center justify-center gap-2 shadow-md active:scale-[0.99] transition-all disabled:opacity-45 disabled:cursor-not-allowed"
             >
@@ -1148,7 +751,7 @@ export const OnboardingPage: React.FC<OnboardingPageProps> = ({ fullScreen = fal
             <button
               type="button"
               disabled={saving}
-              onClick={() => persistAndFinish(false)}
+              onClick={persistAndFinish}
               className="flex-1 min-h-[48px] rounded-full bg-primary hover:bg-primary-container text-on-primary font-label-lg text-label-lg font-bold flex items-center justify-center gap-2 shadow-md active:scale-[0.99] transition-all disabled:opacity-60"
             >
               {saving ? (

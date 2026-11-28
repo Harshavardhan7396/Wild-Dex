@@ -6,6 +6,23 @@ import {
 import { getSignedPhotoUrl } from './supabaseCollectionService';
 import { CURATED_SPECIES } from './speciesService';
 
+export type FollowListKind = 'followers' | 'following';
+
+export interface FollowListUser {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string;
+  iFollow: boolean;
+  followsMe: boolean;
+}
+
+export interface UserRelationship {
+  iFollow: boolean;
+  followsMe: boolean;
+  isBlocked: boolean;
+}
+
 export interface PublicProfileData {
   id: string;
   username: string;
@@ -102,6 +119,27 @@ async function fetchFollowCountsFallback(
     };
   } catch {
     return { followers: 0, following: 0 };
+  }
+}
+
+/**
+ * Fetch exact followers & following counts from user_follows for a userId.
+ */
+export async function fetchUserFollowCounts(
+  targetUserId: string
+): Promise<{ followersCount: number; followingCount: number }> {
+  if (!isSupabaseConfigured || !targetUserId) {
+    return { followersCount: 0, followingCount: 0 };
+  }
+  try {
+    const counts = await fetchFollowCountsFallback(targetUserId);
+    return {
+      followersCount: counts.followers,
+      followingCount: counts.following,
+    };
+  } catch (err) {
+    console.error('Error fetching user follow counts:', err);
+    return { followersCount: 0, followingCount: 0 };
   }
 }
 
@@ -213,6 +251,223 @@ export async function searchPeople(query: string): Promise<PersonSearchResult[]>
   } catch (err: any) {
     console.error('Error calling search_people:', err);
     throw err instanceof Error ? err : new Error('Could not search people.');
+  }
+}
+
+/**
+ * Fetch followers or following list via supabase.rpc('follow_list', { p_user, p_kind }).
+ */
+export async function fetchFollowList(params: {
+  targetUserId: string;
+  kind: FollowListKind;
+  currentUserId?: string;
+}): Promise<FollowListUser[]> {
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase is not configured.');
+  }
+
+  const { targetUserId, kind, currentUserId } = params;
+  if (!targetUserId) return [];
+
+  try {
+    const { data, error } = await supabase.rpc('follow_list', {
+      p_user: targetUserId,
+      p_kind: kind,
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Could not load list.');
+    }
+
+    const rows = Array.isArray(data) ? data : [];
+    const needsViewerRelationshipHydration =
+      Boolean(currentUserId) &&
+      rows.some(
+        (r: any) =>
+          (r?.i_follow === undefined && r?.is_following === undefined) ||
+          (r?.follows_me === undefined && r?.is_follower === undefined)
+      );
+
+    let viewerFollowingSet = new Set<string>();
+    let viewerFollowersSet = new Set<string>();
+
+    if (needsViewerRelationshipHydration && currentUserId) {
+      try {
+        const [myFollowingIds, myFollowersRes] = await Promise.all([
+          fetchFollowingIds(currentUserId),
+          supabase
+            .from('user_follows')
+            .select('follower_id')
+            .eq('following_id', currentUserId),
+        ]);
+        viewerFollowingSet = new Set(myFollowingIds);
+        viewerFollowersSet = new Set(
+          (myFollowersRes.data || [])
+            .map((r: any) => String(r?.follower_id || ''))
+            .filter(Boolean)
+        );
+      } catch (hydrateErr) {
+        console.warn('Could not hydrate viewer follow flags:', hydrateErr);
+      }
+    }
+
+    return rows
+      .filter((row: any) => Boolean(row && (row.id || row.user_id || row.username)))
+      .map((row: any) => {
+        const id = String(row.id || row.user_id || '');
+        const resolvedUsername = String(
+          row.username || row.display_name || 'Explorer'
+        );
+        const resolvedDisplayName = String(
+          row.display_name || row.username || resolvedUsername
+        );
+
+        const rawIFollow = row.i_follow ?? row.is_following ?? row.following;
+        const rawFollowsMe = row.follows_me ?? row.is_follower;
+
+        const iFollow =
+          typeof rawIFollow === 'boolean'
+            ? rawIFollow
+            : viewerFollowingSet.has(id);
+
+        const followsMe =
+          typeof rawFollowsMe === 'boolean'
+            ? rawFollowsMe
+            : (kind === 'followers' && Boolean(currentUserId) && targetUserId === currentUserId) ||
+              viewerFollowersSet.has(id);
+
+        return {
+          id,
+          username: resolvedUsername,
+          displayName: resolvedDisplayName,
+          avatarUrl: String(row.avatar_url || ''),
+          iFollow,
+          followsMe,
+        };
+      });
+  } catch (err: any) {
+    console.error('Error calling follow_list:', err);
+    throw err instanceof Error ? err : new Error('Could not load list.');
+  }
+}
+
+/**
+ * Remove a follower from the current user's followers via supabase.rpc('remove_follower', { p_user }).
+ */
+export async function removeFollower(followerUserId: string): Promise<void> {
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase is not configured.');
+  }
+  if (!followerUserId) {
+    throw new Error('Invalid user.');
+  }
+
+  try {
+    const { error } = await supabase.rpc('remove_follower', {
+      p_user: followerUserId,
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Could not remove follower.');
+    }
+  } catch (err: any) {
+    console.error('Error calling remove_follower:', err);
+    throw err instanceof Error ? err : new Error('Could not remove follower.');
+  }
+}
+
+/**
+ * Fetch mutual relationship between current user and target user via supabase.rpc('relationship', { p_user }).
+ */
+export async function fetchRelationship(
+  targetUserId: string
+): Promise<UserRelationship> {
+  if (!isSupabaseConfigured || !targetUserId) {
+    return { iFollow: false, followsMe: false, isBlocked: false };
+  }
+
+  try {
+    const { data, error } = await supabase.rpc('relationship', {
+      p_user: targetUserId,
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Could not load relationship.');
+    }
+
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row || typeof row !== 'object') {
+      return { iFollow: false, followsMe: false, isBlocked: false };
+    }
+
+    return {
+      iFollow: Boolean(row.i_follow ?? row.is_following),
+      followsMe: Boolean(row.follows_me ?? row.is_follower),
+      isBlocked: Boolean(row.is_blocked ?? row.blocked_by_me ?? row.blocked),
+    };
+  } catch (err: any) {
+    console.error('Error calling relationship:', err);
+    throw err instanceof Error ? err : new Error('Could not load relationship.');
+  }
+}
+
+/**
+ * Block a user via supabase.rpc('block_user', { p_user }).
+ */
+export async function blockUser(targetUserId: string): Promise<void> {
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase is not configured.');
+  }
+  if (!targetUserId) {
+    throw new Error('Invalid user.');
+  }
+
+  try {
+    const { error } = await supabase.rpc('block_user', {
+      p_user: targetUserId,
+    });
+
+    if (error) {
+      throw new Error(error.message || 'Could not block user.');
+    }
+  } catch (err: any) {
+    console.error('Error calling block_user:', err);
+    throw err instanceof Error ? err : new Error('Could not block user.');
+  }
+}
+
+/**
+ * Report a user by inserting into reports with reported_user.
+ */
+export async function reportUser(params: {
+  reportedUserId: string;
+  reporterId: string;
+  reason: string;
+}): Promise<void> {
+  if (!isSupabaseConfigured) {
+    throw new Error('Supabase is not configured.');
+  }
+  const { reportedUserId, reporterId, reason } = params;
+  const cleanReason = reason.trim();
+  if (!cleanReason) {
+    throw new Error('Please choose a reason for reporting.');
+  }
+
+  try {
+    const { error } = await supabase.from('reports').insert([
+      {
+        reported_user: reportedUserId,
+        reporter_id: reporterId,
+        reason: cleanReason,
+      },
+    ]);
+
+    if (error) {
+      throw new Error(error.message || 'Could not submit report.');
+    }
+  } catch (err: any) {
+    console.error('Error reporting user:', err);
+    throw err instanceof Error ? err : new Error('Could not submit report.');
   }
 }
 

@@ -53,11 +53,6 @@ export const ForYouSpeciesCard: React.FC<ForYouSpeciesCardProps> = ({
               <span className="material-symbols-outlined text-[13px]">shield</span>
               <span>{conservationText || 'Protected'}</span>
             </span>
-          ) : item.seenNearYou ? (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary text-on-secondary font-label-sm text-[11px] font-bold shadow-sm">
-              <span className="material-symbols-outlined text-[13px]">location_on</span>
-              <span>Seen near you</span>
-            </span>
           ) : item.relationLabel ? (
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface/90 text-primary font-label-sm text-[11px] font-bold shadow-sm backdrop-blur-sm max-w-full truncate">
               <span className="material-symbols-outlined text-[13px] shrink-0">account_tree</span>

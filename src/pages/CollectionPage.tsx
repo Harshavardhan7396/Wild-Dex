@@ -18,6 +18,8 @@ import {
   ensureDefaultAlbum,
 } from '../services/supabaseCollectionService';
 import { CURATED_SPECIES } from '../services/speciesService';
+import { CareSubjectFormModal, CareSubjectPrefill } from '../components/care/CareSubjectFormModal';
+import { CareSubject, inferCareKindFromCategory } from '../services/careService';
 
 export const CollectionPage: React.FC = () => {
   const { currentUser, setAuthModalOpen } = useAuth();
@@ -45,6 +47,23 @@ export const CollectionPage: React.FC = () => {
   const [newAlbumDesc, setNewAlbumDesc] = useState('');
   const [albumToDelete, setAlbumToDelete] = useState<FirebaseAlbum | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [careModalOpen, setCareModalOpen] = useState(false);
+  const [carePrefill, setCarePrefill] = useState<CareSubjectPrefill | null>(null);
+
+  const openAddToCare = (item: FirebaseCollectionItem) => {
+    const inferredKind = inferCareKindFromCategory(item.category);
+    if (!inferredKind) return;
+    if (!currentUser) {
+      setAuthModalOpen(true);
+      return;
+    }
+    setCarePrefill({
+      kind: inferredKind,
+      speciesCommon: item.commonName || '',
+      speciesScientific: item.scientificName || '',
+    });
+    setCareModalOpen(true);
+  };
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -608,6 +627,18 @@ export const CollectionPage: React.FC = () => {
                       </span>
 
                       <div className="flex items-center gap-1">
+                        {inferCareKindFromCategory(item.category) !== null && (
+                          <button
+                            title="Add to My Care"
+                            aria-label={`Add ${item.commonName} to My Care`}
+                            onClick={() => openAddToCare(item)}
+                            className="w-7 h-7 rounded-full flex items-center justify-center hover:bg-secondary-container/60 hover:text-primary transition-colors"
+                            type="button"
+                          >
+                            <span className="material-symbols-outlined text-[16px]">favorite</span>
+                          </button>
+                        )}
+
                         <button
                           title="Move to Album"
                           onClick={() => {
@@ -1145,11 +1176,21 @@ export const CollectionPage: React.FC = () => {
               </div>
             )}
 
-            <div className="flex gap-2 pt-2">
+            <div className="flex flex-wrap gap-2 pt-2">
+              {inferCareKindFromCategory(detailItem.category) !== null && (
+                <button
+                  type="button"
+                  onClick={() => openAddToCare(detailItem)}
+                  className="flex-1 min-w-[140px] py-2.5 px-3 rounded-full bg-secondary-container text-on-secondary-container font-label-md font-bold text-center inline-flex items-center justify-center gap-1.5 hover:opacity-95"
+                >
+                  <span className="material-symbols-outlined text-[18px]">favorite</span>
+                  <span>Add to My Care</span>
+                </button>
+              )}
               <Link
                 to={`/species/${detailItem.speciesId}`}
                 onClick={() => setDetailItem(null)}
-                className="flex-1 py-2.5 rounded-full bg-primary text-on-primary font-label-md font-bold text-center shadow-md"
+                className="flex-1 min-w-[140px] py-2.5 px-3 rounded-full bg-primary text-on-primary font-label-md font-bold text-center shadow-md"
               >
                 Encyclopedia Dossier
               </Link>
@@ -1157,6 +1198,17 @@ export const CollectionPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <CareSubjectFormModal
+        isOpen={careModalOpen}
+        subjectToEdit={null}
+        prefill={carePrefill}
+        onClose={() => setCareModalOpen(false)}
+        onSaved={(saved: CareSubject) => {
+          setCareModalOpen(false);
+          showToast(`Added ${saved.name} to My Care`);
+        }}
+      />
     </div>
   );
 };

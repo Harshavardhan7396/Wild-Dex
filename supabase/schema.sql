@@ -535,15 +535,19 @@ CREATE TABLE IF NOT EXISTS public.post_comments (
 CREATE INDEX IF NOT EXISTS idx_post_comments_post_id ON public.post_comments(post_id);
 CREATE INDEX IF NOT EXISTS idx_post_comments_created_at ON public.post_comments(created_at ASC);
 
--- Post reports
+-- Post & user reports
 CREATE TABLE IF NOT EXISTS public.reports (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  post_id UUID REFERENCES public.community_posts(id) ON DELETE CASCADE NOT NULL,
+  post_id UUID REFERENCES public.community_posts(id) ON DELETE CASCADE,
+  reported_user UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   reporter_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   reason TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+ALTER TABLE public.reports ALTER COLUMN post_id DROP NOT NULL;
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS reported_user UUID REFERENCES auth.users(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_reports_post_id ON public.reports(post_id);
+CREATE INDEX IF NOT EXISTS idx_reports_reported_user ON public.reports(reported_user);
 CREATE INDEX IF NOT EXISTS idx_reports_reporter_id ON public.reports(reporter_id);
 
 -- Enable RLS on Community tables
@@ -1117,6 +1121,478 @@ $$;
 
 REVOKE ALL ON FUNCTION public.search_people(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.search_people(TEXT) TO anon, authenticated, service_role;
+
+-- ==============================================================================
+-- 13. FOLLOWER LISTS, RELATIONSHIPS & BLOCKING
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS public.user_blocks (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  blocker_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  blocked_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  UNIQUE(blocker_id, blocked_id),
+  CHECK (blocker_id <> blocked_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON public.user_blocks(blocker_id);
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON public.user_blocks(blocked_id);
+
+ALTER TABLE public.user_blocks ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own blocks" ON public.user_blocks;
+CREATE POLICY "Users can view their own blocks"
+  ON public.user_blocks FOR SELECT
+  TO authenticated
+  USING (auth.uid() = blocker_id);
+
+DROP POLICY IF EXISTS "Users can block others" ON public.user_blocks;
+CREATE POLICY "Users can block others"
+  ON public.user_blocks FOR INSERT
+  TO authenticated
+  WITH CHECK (auth.uid() = blocker_id AND blocker_id <> blocked_id);
+
+DROP POLICY IF EXISTS "Users can unblock others" ON public.user_blocks;
+CREATE POLICY "Users can unblock others"
+  ON public.user_blocks FOR DELETE
+  TO authenticated
+  USING (auth.uid() = blocker_id);
+
+-- RPC: follow_list(p_user UUID, p_kind TEXT)
+CREATE OR REPLACE FUNCTION public.follow_list(p_user UUID, p_kind TEXT DEFAULT 'followers')
+RETURNS TABLE (
+  id UUID,
+  username TEXT,
+  display_name TEXT,
+  avatar_url TEXT,
+  i_follow BOOLEAN,
+  follows_me BOOLEAN
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_is_public BOOLEAN;
+BEGIN
+  SELECT COALESCE(p.is_public, true) INTO v_is_public
+  FROM public.profiles p
+  WHERE p.id = p_user;
+
+  IF v_is_public = false AND auth.uid() IS DISTINCT FROM p_user THEN
+    RAISE EXCEPTION 'This profile is private';
+  END IF;
+
+  IF LOWER(COALESCE(p_kind, 'followers')) = 'following' THEN
+    RETURN QUERY
+    SELECT
+      p.id,
+      COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), 'Explorer') AS username,
+      COALESCE(NULLIF(p.display_name, ''), NULLIF(p.username, ''), 'Explorer') AS display_name,
+      COALESCE(p.avatar_url, '') AS avatar_url,
+      EXISTS (
+        SELECT 1 FROM public.user_follows uf2
+        WHERE uf2.follower_id = auth.uid() AND uf2.following_id = p.id
+      ) AS i_follow,
+      EXISTS (
+        SELECT 1 FROM public.user_follows uf3
+        WHERE uf3.follower_id = p.id AND uf3.following_id = auth.uid()
+      ) AS follows_me
+    FROM public.user_follows uf
+    JOIN public.profiles p ON p.id = uf.following_id
+    WHERE uf.follower_id = p_user
+    ORDER BY uf.created_at DESC;
+  ELSE
+    RETURN QUERY
+    SELECT
+      p.id,
+      COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), 'Explorer') AS username,
+      COALESCE(NULLIF(p.display_name, ''), NULLIF(p.username, ''), 'Explorer') AS display_name,
+      COALESCE(p.avatar_url, '') AS avatar_url,
+      EXISTS (
+        SELECT 1 FROM public.user_follows uf2
+        WHERE uf2.follower_id = auth.uid() AND uf2.following_id = p.id
+      ) AS i_follow,
+      EXISTS (
+        SELECT 1 FROM public.user_follows uf3
+        WHERE uf3.follower_id = p.id AND uf3.following_id = auth.uid()
+      ) AS follows_me
+    FROM public.user_follows uf
+    JOIN public.profiles p ON p.id = uf.follower_id
+    WHERE uf.following_id = p_user
+    ORDER BY uf.created_at DESC;
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.follow_list(UUID, TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.follow_list(UUID, TEXT) TO authenticated, service_role;
+
+-- RPC: remove_follower(p_user UUID)
+CREATE OR REPLACE FUNCTION public.remove_follower(p_user UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+
+  DELETE FROM public.user_follows
+  WHERE follower_id = p_user
+    AND following_id = auth.uid();
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.remove_follower(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.remove_follower(UUID) TO authenticated, service_role;
+
+-- RPC: relationship(p_user UUID)
+CREATE OR REPLACE FUNCTION public.relationship(p_user UUID)
+RETURNS TABLE (
+  i_follow BOOLEAN,
+  follows_me BOOLEAN,
+  is_blocked BOOLEAN
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    EXISTS (
+      SELECT 1 FROM public.user_follows uf
+      WHERE uf.follower_id = auth.uid() AND uf.following_id = p_user
+    ) AS i_follow,
+    EXISTS (
+      SELECT 1 FROM public.user_follows uf
+      WHERE uf.follower_id = p_user AND uf.following_id = auth.uid()
+    ) AS follows_me,
+    EXISTS (
+      SELECT 1 FROM public.user_blocks ub
+      WHERE ub.blocker_id = auth.uid() AND ub.blocked_id = p_user
+    ) AS is_blocked;
+$$;
+
+REVOKE ALL ON FUNCTION public.relationship(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.relationship(UUID) TO authenticated, service_role;
+
+-- RPC: block_user(p_user UUID)
+CREATE OR REPLACE FUNCTION public.block_user(p_user UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+  IF p_user = auth.uid() THEN
+    RAISE EXCEPTION 'Cannot block yourself';
+  END IF;
+
+  INSERT INTO public.user_blocks (blocker_id, blocked_id)
+  VALUES (auth.uid(), p_user)
+  ON CONFLICT (blocker_id, blocked_id) DO NOTHING;
+
+  DELETE FROM public.user_follows
+  WHERE (follower_id = auth.uid() AND following_id = p_user)
+     OR (follower_id = p_user AND following_id = auth.uid());
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.block_user(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.block_user(UUID) TO authenticated, service_role;
+
+-- ==============================================================================
+-- 14. PRIVATE CHAT BETWEEN MUTUAL FOLLOWERS (REALTIME)
+-- ==============================================================================
+
+CREATE TABLE IF NOT EXISTS public.conversations (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.conversation_participants (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  last_read_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  UNIQUE(conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_participants_conv ON public.conversation_participants(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_conv_participants_user ON public.conversation_participants(user_id);
+
+CREATE TABLE IF NOT EXISTS public.messages (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  conversation_id UUID REFERENCES public.conversations(id) ON DELETE CASCADE NOT NULL,
+  sender_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  body TEXT NOT NULL CHECK (char_length(body) > 0 AND char_length(body) <= 1000),
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_messages_conv_created ON public.messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_sender ON public.messages(sender_id);
+
+-- Link reports.message_id for message reporting
+ALTER TABLE public.reports ADD COLUMN IF NOT EXISTS message_id UUID REFERENCES public.messages(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_reports_message_id ON public.reports(message_id);
+
+ALTER TABLE public.conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversation_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+
+-- Security helper: check mutual friendship and non-blocked state
+CREATE OR REPLACE FUNCTION public.are_mutual_friends(p_user_a UUID, p_user_b UUID)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    p_user_a IS NOT NULL
+    AND p_user_b IS NOT NULL
+    AND p_user_a <> p_user_b
+    AND EXISTS (
+      SELECT 1 FROM public.user_follows f1
+      WHERE f1.follower_id = p_user_a AND f1.following_id = p_user_b
+    )
+    AND EXISTS (
+      SELECT 1 FROM public.user_follows f2
+      WHERE f2.follower_id = p_user_b AND f2.following_id = p_user_a
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM public.user_blocks b
+      WHERE (b.blocker_id = p_user_a AND b.blocked_id = p_user_b)
+         OR (b.blocker_id = p_user_b AND b.blocked_id = p_user_a)
+    );
+$$;
+
+-- RLS policies for conversations / participants / messages
+DROP POLICY IF EXISTS "Participants can view their conversations" ON public.conversations;
+CREATE POLICY "Participants can view their conversations"
+  ON public.conversations FOR SELECT
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.conversation_participants cp
+      WHERE cp.conversation_id = conversations.id AND cp.user_id = auth.uid()
+    )
+  );
+
+DROP POLICY IF EXISTS "Participants can view conversation members" ON public.conversation_participants;
+CREATE POLICY "Participants can view conversation members"
+  ON public.conversation_participants FOR SELECT
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.conversation_participants cp
+      WHERE cp.conversation_id = conversation_participants.conversation_id
+        AND cp.user_id = auth.uid()
+    )
+  );
+
+DROP POLICY IF EXISTS "Participants can view messages" ON public.messages;
+CREATE POLICY "Participants can view messages"
+  ON public.messages FOR SELECT
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.conversation_participants cp
+      WHERE cp.conversation_id = messages.conversation_id
+        AND cp.user_id = auth.uid()
+    )
+  );
+
+DROP POLICY IF EXISTS "Mutual friends can send messages" ON public.messages;
+CREATE POLICY "Mutual friends can send messages"
+  ON public.messages FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    auth.uid() = sender_id
+    AND EXISTS (
+      SELECT 1 FROM public.conversation_participants cp1
+      JOIN public.conversation_participants cp2
+        ON cp2.conversation_id = cp1.conversation_id AND cp2.user_id <> cp1.user_id
+      WHERE cp1.conversation_id = messages.conversation_id
+        AND cp1.user_id = auth.uid()
+        AND public.are_mutual_friends(auth.uid(), cp2.user_id)
+    )
+  );
+
+DROP POLICY IF EXISTS "Users can delete own messages" ON public.messages;
+CREATE POLICY "Users can delete own messages"
+  ON public.messages FOR DELETE
+  TO authenticated
+  USING (auth.uid() = sender_id);
+
+-- RPC: start_conversation(p_other UUID) -> returns conversation_id UUID
+CREATE OR REPLACE FUNCTION public.start_conversation(p_other UUID)
+RETURNS UUID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_me UUID;
+  v_conv_id UUID;
+BEGIN
+  v_me := auth.uid();
+  IF v_me IS NULL THEN
+    RAISE EXCEPTION 'Authentication required';
+  END IF;
+  IF NOT public.are_mutual_friends(v_me, p_other) THEN
+    RAISE EXCEPTION 'You can only message people who follow you back';
+  END IF;
+
+  SELECT cp1.conversation_id INTO v_conv_id
+  FROM public.conversation_participants cp1
+  JOIN public.conversation_participants cp2
+    ON cp1.conversation_id = cp2.conversation_id
+  WHERE cp1.user_id = v_me
+    AND cp2.user_id = p_other
+  LIMIT 1;
+
+  IF v_conv_id IS NOT NULL THEN
+    RETURN v_conv_id;
+  END IF;
+
+  INSERT INTO public.conversations DEFAULT VALUES
+  RETURNING id INTO v_conv_id;
+
+  INSERT INTO public.conversation_participants (conversation_id, user_id)
+  VALUES (v_conv_id, v_me), (v_conv_id, p_other);
+
+  RETURN v_conv_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.start_conversation(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.start_conversation(UUID) TO authenticated, service_role;
+
+-- RPC: mark_read(p_conv UUID)
+CREATE OR REPLACE FUNCTION public.mark_read(p_conv UUID)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_me UUID;
+  v_now TIMESTAMPTZ := TIMEZONE('utc'::text, NOW());
+BEGIN
+  v_me := auth.uid();
+  IF v_me IS NULL THEN
+    RETURN;
+  END IF;
+
+  UPDATE public.conversation_participants
+  SET last_read_at = v_now
+  WHERE conversation_id = p_conv
+    AND user_id = v_me;
+
+  UPDATE public.messages
+  SET read_at = v_now
+  WHERE conversation_id = p_conv
+    AND sender_id <> v_me
+    AND read_at IS NULL;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.mark_read(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.mark_read(UUID) TO authenticated, service_role;
+
+-- RPC: my_conversations()
+CREATE OR REPLACE FUNCTION public.my_conversations()
+RETURNS TABLE (
+  conversation_id UUID,
+  other_user_id UUID,
+  other_username TEXT,
+  other_display_name TEXT,
+  other_avatar_url TEXT,
+  last_message TEXT,
+  last_message_at TIMESTAMPTZ,
+  last_sender_id UUID,
+  unread_count BIGINT,
+  other_last_read_at TIMESTAMPTZ
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT
+    c.id AS conversation_id,
+    p.id AS other_user_id,
+    COALESCE(NULLIF(p.username, ''), NULLIF(p.display_name, ''), 'Explorer') AS other_username,
+    COALESCE(NULLIF(p.display_name, ''), NULLIF(p.username, ''), 'Explorer') AS other_display_name,
+    COALESCE(p.avatar_url, '') AS other_avatar_url,
+    COALESCE(lm.body, '') AS last_message,
+    COALESCE(lm.created_at, c.updated_at, c.created_at) AS last_message_at,
+    lm.sender_id AS last_sender_id,
+    (
+      SELECT COUNT(*)::BIGINT
+      FROM public.messages m
+      WHERE m.conversation_id = c.id
+        AND m.sender_id <> auth.uid()
+        AND m.created_at > me_cp.last_read_at
+    ) AS unread_count,
+    other_cp.last_read_at AS other_last_read_at
+  FROM public.conversation_participants me_cp
+  JOIN public.conversations c ON c.id = me_cp.conversation_id
+  JOIN public.conversation_participants other_cp
+    ON other_cp.conversation_id = c.id AND other_cp.user_id <> auth.uid()
+  JOIN public.profiles p ON p.id = other_cp.user_id
+  LEFT JOIN LATERAL (
+    SELECT m.body, m.created_at, m.sender_id
+    FROM public.messages m
+    WHERE m.conversation_id = c.id
+    ORDER BY m.created_at DESC
+    LIMIT 1
+  ) lm ON true
+  WHERE me_cp.user_id = auth.uid()
+  ORDER BY COALESCE(lm.created_at, c.created_at) DESC;
+$$;
+
+REVOKE ALL ON FUNCTION public.my_conversations() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.my_conversations() TO authenticated, service_role;
+
+-- RPC: unread_total()
+CREATE OR REPLACE FUNCTION public.unread_total()
+RETURNS BIGINT
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT COALESCE(SUM(cnt), 0)::BIGINT
+  FROM (
+    SELECT COUNT(*) AS cnt
+    FROM public.conversation_participants cp
+    JOIN public.messages m ON m.conversation_id = cp.conversation_id
+    WHERE cp.user_id = auth.uid()
+      AND m.sender_id <> auth.uid()
+      AND m.created_at > cp.last_read_at
+  ) sub;
+$$;
+
+REVOKE ALL ON FUNCTION public.unread_total() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.unread_total() TO authenticated, service_role;
+
+-- Enable Supabase Realtime on messages table
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'messages'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+  END IF;
+END $$;
 
 -- Refresh PostgREST schema cache so newly added columns and functions are immediately visible
 NOTIFY pgrst, 'reload schema';

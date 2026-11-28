@@ -57,8 +57,6 @@ export interface AreaInfo {
 
 export const COMMUNITY_PAGE_SIZE = 10;
 
-const areaCache = new Map<string, AreaInfo>();
-
 function ensureSupabaseConfigured() {
   if (!isSupabaseConfigured) {
     throw new Error('Supabase is not configured. Please check your environment variables.');
@@ -216,57 +214,8 @@ export function containsExactCoordinates(value: string): boolean {
   return decimalCoords.test(trimmed) || dmsCoords.test(trimmed);
 }
 
-export async function resolveAreaInfo(lat: number, lng: number): Promise<AreaInfo> {
-  const roundedLat = Math.round(lat * 100) / 100;
-  const roundedLng = Math.round(lng * 100) / 100;
-  const key = `${roundedLat.toFixed(2)},${roundedLng.toFixed(2)}`;
-
-  const cached = areaCache.get(key);
-  if (cached) return cached;
-
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${roundedLat}&lon=${roundedLng}&zoom=10`,
-      {
-        headers: {
-          Accept: 'application/json',
-        },
-      }
-    );
-    if (!res.ok) {
-      throw new Error(`Nominatim reverse error: ${res.status}`);
-    }
-    const json = await res.json();
-    const addr = (json?.address || {}) as Record<string, string | undefined>;
-    const locality =
-      addr.city ||
-      addr.town ||
-      addr.village ||
-      addr.municipality ||
-      addr.county ||
-      '';
-    const region = addr.state || addr.region || addr.province || '';
-    const country = addr.country || '';
-
-    const rawTokens = [locality, region, addr.county, country]
-      .map((t) => (t ? t.trim() : ''))
-      .filter((t) => t.length >= 2);
-    const tokens = Array.from(new Set(rawTokens));
-
-    const primaryLabel =
-      locality && region
-        ? `${locality}, ${region}`
-        : locality || region || country || '';
-
-    const info: AreaInfo = { primaryLabel, tokens };
-    areaCache.set(key, info);
-    return info;
-  } catch (err) {
-    console.warn('Could not reverse-geocode rounded home area:', err);
-    const fallback: AreaInfo = { primaryLabel: '', tokens: [] };
-    areaCache.set(key, fallback);
-    return fallback;
-  }
+export async function resolveAreaInfo(_lat: number, _lng: number): Promise<AreaInfo> {
+  return { primaryLabel: '', tokens: [] };
 }
 
 async function fetchPublicProfilesMap(userIds: string[]): Promise<Map<string, PublicAuthor>> {

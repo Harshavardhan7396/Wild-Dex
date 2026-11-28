@@ -1,5 +1,5 @@
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Header } from './Header';
 import { BottomNav } from './BottomNav';
 import { useAuth } from '../../contexts/AuthContext';
@@ -7,6 +7,8 @@ import { LoginScreen } from '../auth/LoginScreen';
 
 export const AppLayout: React.FC = () => {
   const { currentUser, loading, isGuest } = useAuth();
+  const location = useLocation();
+  const isChatThread = /^\/messages\/[^/]+/.test(location.pathname);
 
   if (loading) {
     return (
@@ -37,10 +39,14 @@ export const AppLayout: React.FC = () => {
   return (
     <div className="bg-surface text-on-surface font-body-md antialiased min-h-screen flex flex-col selection:bg-secondary-container overflow-x-clip">
       <Header />
-      <main className="flex-1 w-full min-w-0 max-w-lg md:max-w-3xl lg:max-w-6xl xl:max-w-7xl mx-auto bg-surface pt-16 md:pt-20 pb-28 md:pb-16 flex flex-col transition-all">
+      <main
+        className={`flex-1 w-full min-w-0 max-w-lg md:max-w-3xl lg:max-w-6xl xl:max-w-7xl mx-auto bg-surface pt-16 md:pt-20 flex flex-col transition-all ${
+          isChatThread ? 'pb-0 md:pb-4' : 'pb-28 md:pb-16'
+        }`}
+      >
         <Outlet />
       </main>
-      <BottomNav />
+      {!isChatThread && <BottomNav />}
     </div>
   );
 };
