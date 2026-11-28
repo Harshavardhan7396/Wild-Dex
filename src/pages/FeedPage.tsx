@@ -34,6 +34,11 @@ import {
   toggleFollowUser,
   togglePostLike,
 } from '../services/communityService';
+import {
+  AskQuestion,
+  getAskCategoryMeta,
+  listNewestOpenQuestions,
+} from '../services/askService';
 
 const REPORT_REASONS = [
   'Spam or misleading',
@@ -83,6 +88,7 @@ export const FeedPage: React.FC = () => {
   const [areaLabel, setAreaLabel] = useState<string>('');
   const [areaTokens, setAreaTokens] = useState<string[]>([]);
   const [areaResolved, setAreaResolved] = useState<boolean>(false);
+  const [openQuestions, setOpenQuestions] = useState<AskQuestion[]>([]);
 
   const [page, setPage] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -308,6 +314,30 @@ export const FeedPage: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     areaTokens.join('|'),
   ]);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!currentUser) {
+      setOpenQuestions([]);
+      return;
+    }
+    let cancelled = false;
+    listNewestOpenQuestions(3)
+      .then((rows) => {
+        if (!cancelled) {
+          setOpenQuestions(rows);
+        }
+      })
+      .catch((err) => {
+        console.warn('Could not load open Ask questions for Community:', err);
+        if (!cancelled) {
+          setOpenQuestions([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, currentUser?.id]);
 
   const handleRetryFeed = async () => {
     try {
@@ -950,6 +980,65 @@ export const FeedPage: React.FC = () => {
       <section className="px-3 sm:px-margin pb-2">
         <FindPeopleBox />
       </section>
+
+      {/* Can you help identify this? Open Questions Preview */}
+      {openQuestions.length > 0 && (
+        <section className="px-3 sm:px-margin pb-2">
+          <div className="p-3.5 sm:p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20 shadow-sm space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="material-symbols-outlined text-[20px] text-primary shrink-0">
+                  help
+                </span>
+                <h2 className="font-headline-sm text-headline-sm text-on-surface font-bold truncate">
+                  Can you help identify this?
+                </h2>
+              </div>
+              <Link
+                to="/ask"
+                className="font-label-md text-label-md text-primary font-semibold hover:underline shrink-0"
+              >
+                See all
+              </Link>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {openQuestions.map((q) => {
+                const catMeta = getAskCategoryMeta(q.category);
+                return (
+                  <Link
+                    key={q.id}
+                    to={`/ask/${q.id}`}
+                    className="flex items-center gap-2.5 p-2 rounded-xl bg-surface-container hover:bg-surface-container-high transition-colors min-w-0"
+                  >
+                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-surface-container-highest shrink-0 flex items-center justify-center">
+                      {q.photoUrl ? (
+                        <img
+                          src={q.photoUrl}
+                          alt={q.title}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="material-symbols-outlined text-[20px] text-on-surface-variant">
+                          {catMeta.icon}
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-label-md text-label-md text-on-surface font-semibold truncate">
+                        {q.title}
+                      </p>
+                      <p className="font-body-sm text-[11px] text-on-surface-variant truncate">
+                        {catMeta.label} • {formatRelativeTime(q.createdAt)}
+                      </p>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Separate Invite & Joining Code Sections */}
       {invitePanelOpen && (

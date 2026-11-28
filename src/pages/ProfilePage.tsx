@@ -14,14 +14,32 @@ import {
   FollowListSheet,
   FollowCountsDelta,
 } from '../components/profile/FollowListSheet';
+import {
+  AskQuestion,
+  ProfileAskAnswer,
+  fetchHelperCount,
+  listAnswersByAuthor,
+  listQuestionsByAuthor,
+} from '../services/askService';
+import {
+  ProfileAnswersTab,
+  ProfileQuestionsTab,
+} from '../components/ask/ProfileAskTabs';
 
 export const ProfilePage: React.FC = () => {
   const { currentUser, userProfile, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'sightings' | 'badges' | 'taxonomy'>('sightings');
+  const [activeTab, setActiveTab] = useState<'sightings' | 'questions' | 'answers' | 'badges' | 'taxonomy'>('sightings');
   const [userSpecimens, setUserSpecimens] = useState<FirebaseCollectionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [followersCount, setFollowersCount] = useState(0);
   const [followingCount, setFollowingCount] = useState(0);
+  const [helperCount, setHelperCount] = useState(0);
+  const [myQuestions, setMyQuestions] = useState<AskQuestion[]>([]);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const [questionsError, setQuestionsError] = useState<string | null>(null);
+  const [myAnswers, setMyAnswers] = useState<ProfileAskAnswer[]>([]);
+  const [answersLoading, setAnswersLoading] = useState(false);
+  const [answersError, setAnswersError] = useState<string | null>(null);
   const [followSheetOpen, setFollowSheetOpen] = useState(false);
   const [followSheetTab, setFollowSheetTab] = useState<FollowListKind>('followers');
   const [toast, setToast] = useState<string | null>(null);
@@ -31,10 +49,39 @@ export const ProfilePage: React.FC = () => {
     setTimeout(() => setToast(null), 2500);
   };
 
+  const loadMyQuestions = async (userId: string) => {
+    setQuestionsLoading(true);
+    setQuestionsError(null);
+    try {
+      const data = await listQuestionsByAuthor(userId);
+      setMyQuestions(data);
+    } catch (err: any) {
+      setQuestionsError(err?.message || 'Could not load questions.');
+    } finally {
+      setQuestionsLoading(false);
+    }
+  };
+
+  const loadMyAnswers = async (userId: string) => {
+    setAnswersLoading(true);
+    setAnswersError(null);
+    try {
+      const data = await listAnswersByAuthor(userId);
+      setMyAnswers(data);
+    } catch (err: any) {
+      setAnswersError(err?.message || 'Could not load answers.');
+    } finally {
+      setAnswersLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!currentUser) {
       setFollowersCount(0);
       setFollowingCount(0);
+      setHelperCount(0);
+      setMyQuestions([]);
+      setMyAnswers([]);
       return;
     }
 
@@ -44,16 +91,21 @@ export const ProfilePage: React.FC = () => {
     Promise.all([
       getFirebaseUserCollection(currentUser.uid).catch(() => [] as FirebaseCollectionItem[]),
       fetchUserFollowCounts(currentUser.id).catch(() => ({ followersCount: 0, followingCount: 0 })),
+      fetchHelperCount(currentUser.id).catch(() => 0),
     ])
-      .then(([items, counts]) => {
+      .then(([items, counts, helpers]) => {
         if (cancelled) return;
         setUserSpecimens(items);
         setFollowersCount(counts.followersCount);
         setFollowingCount(counts.followingCount);
+        setHelperCount(helpers);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+
+    loadMyQuestions(currentUser.id);
+    loadMyAnswers(currentUser.id);
 
     return () => {
       cancelled = true;
@@ -241,14 +293,6 @@ export const ProfilePage: React.FC = () => {
               <p className="font-label-sm text-label-sm text-on-surface-variant truncate">
                 Field Observer • {currentUser.email || userProfile?.email}
               </p>
-              <div className="flex flex-wrap items-center gap-2 mt-1">
-                <span className="px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-bold capitalize">
-                  {userProfile?.experienceLevel || 'Enthusiast'} Level
-                </span>
-                <span className="font-label-sm text-[11px] text-secondary font-semibold">
-                  {totalLogged * 150 + 200} XP
-                </span>
-              </div>
             </div>
           </div>
 
@@ -303,6 +347,28 @@ export const ProfilePage: React.FC = () => {
               <p className="font-label-sm text-[10px] text-on-surface-variant">Following</p>
             </button>
           </div>
+
+          {/* Helped identify card */}
+          <div className="p-3 rounded-2xl bg-surface-container-lowest border border-outline-variant/20 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
+                  verified
+                </span>
+              </div>
+              <div className="min-w-0">
+                <p className="font-label-md text-xs text-on-surface font-bold">
+                  Helped identify
+                </p>
+                <p className="font-body-sm text-[11px] text-on-surface-variant">
+                  times a best answer
+                </p>
+              </div>
+            </div>
+            <span className="font-headline-sm text-xl text-primary font-bold tabular-nums shrink-0">
+              {helperCount}
+            </span>
+          </div>
         </div>
       )}
 
@@ -323,10 +389,10 @@ export const ProfilePage: React.FC = () => {
       )}
 
       {/* Quick Navigation Hub */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         <Link
           to="/leaderboard"
-          className="p-3 rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
+          className="p-3 min-h-[48px] rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="material-symbols-outlined text-secondary text-[22px] shrink-0">trophy</span>
@@ -336,11 +402,21 @@ export const ProfilePage: React.FC = () => {
         </Link>
         <Link
           to="/collection"
-          className="p-3 rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
+          className="p-3 min-h-[48px] rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
         >
           <div className="flex items-center gap-2.5 min-w-0">
             <span className="material-symbols-outlined text-primary text-[22px] shrink-0">collections_bookmark</span>
             <span className="font-label-md text-label-md font-bold text-on-surface truncate">My Collection</span>
+          </div>
+          <span className="material-symbols-outlined text-outline text-[18px] shrink-0">chevron_right</span>
+        </Link>
+        <Link
+          to="/year-review"
+          className="p-3 min-h-[48px] rounded-2xl bg-surface-container flex items-center justify-between hover:bg-surface-container-high transition-colors"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="material-symbols-outlined text-primary text-[22px] shrink-0">calendar_month</span>
+            <span className="font-label-md text-label-md font-bold text-on-surface truncate">Year in Review</span>
           </div>
           <span className="material-symbols-outlined text-outline text-[18px] shrink-0">chevron_right</span>
         </Link>
@@ -401,11 +477,11 @@ export const ProfilePage: React.FC = () => {
 
       {/* Segmented Detail Tabs */}
       <div className="flex flex-wrap sm:flex-nowrap bg-surface-container-low p-1 rounded-2xl sm:rounded-full gap-1">
-        {(['sightings', 'badges', 'taxonomy'] as const).map((tab) => (
+        {(['sightings', 'questions', 'answers', 'badges', 'taxonomy'] as const).map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 min-w-[90px] py-1.5 px-2 rounded-full font-label-md text-label-md capitalize transition-all ${
+            className={`flex-1 min-w-[80px] py-1.5 px-2 rounded-full font-label-md text-label-md capitalize transition-all ${
               activeTab === tab
                 ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                 : 'text-on-surface-variant'
@@ -454,7 +530,27 @@ export const ProfilePage: React.FC = () => {
         </div>
       )}
 
-      {/* Tab 2: Badges */}
+      {/* Tab 2: Questions */}
+      {activeTab === 'questions' && (
+        <ProfileQuestionsTab
+          questions={myQuestions}
+          loading={questionsLoading}
+          error={questionsError}
+          onRetry={() => currentUser && loadMyQuestions(currentUser.id)}
+        />
+      )}
+
+      {/* Tab 3: Answers */}
+      {activeTab === 'answers' && (
+        <ProfileAnswersTab
+          answers={myAnswers}
+          loading={answersLoading}
+          error={answersError}
+          onRetry={() => currentUser && loadMyAnswers(currentUser.id)}
+        />
+      )}
+
+      {/* Tab 4: Badges */}
       {activeTab === 'badges' && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {badges.map((b, i) => (

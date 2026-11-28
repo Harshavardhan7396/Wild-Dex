@@ -21,6 +21,17 @@ import {
   FollowCountsDelta,
 } from '../components/profile/FollowListSheet';
 import { startConversation } from '../services/chatService';
+import {
+  AskQuestion,
+  ProfileAskAnswer,
+  fetchHelperCount,
+  listAnswersByAuthor,
+  listQuestionsByAuthor,
+} from '../services/askService';
+import {
+  ProfileAnswersTab,
+  ProfileQuestionsTab,
+} from '../components/ask/ProfileAskTabs';
 
 const REPORT_REASONS = [
   'Spam or misleading sightings',
@@ -60,7 +71,7 @@ export const PublicProfilePage: React.FC = () => {
   const [followBusy, setFollowBusy] = useState(false);
   const [followError, setFollowError] = useState<string | null>(null);
 
-  const [activeTab, setActiveTab] = useState<'posts' | 'collection'>('posts');
+  const [activeTab, setActiveTab] = useState<'posts' | 'collection' | 'questions' | 'answers'>('posts');
 
   const [posts, setPosts] = useState<PublicUserPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
@@ -69,6 +80,15 @@ export const PublicProfilePage: React.FC = () => {
   const [collectionItems, setCollectionItems] = useState<PublicCollectionItem[]>([]);
   const [collectionLoading, setCollectionLoading] = useState(false);
   const [collectionError, setCollectionError] = useState<string | null>(null);
+
+  const [helperCount, setHelperCount] = useState<number>(0);
+  const [userQuestions, setUserQuestions] = useState<AskQuestion[]>([]);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const [questionsError, setQuestionsError] = useState<string | null>(null);
+
+  const [userAnswers, setUserAnswers] = useState<ProfileAskAnswer[]>([]);
+  const [answersLoading, setAnswersLoading] = useState(false);
+  const [answersError, setAnswersError] = useState<string | null>(null);
 
   // Follow sheet state
   const [followSheetOpen, setFollowSheetOpen] = useState(false);
@@ -123,6 +143,32 @@ export const PublicProfilePage: React.FC = () => {
     }
   }, []);
 
+  const loadUserQuestions = useCallback(async (targetUserId: string) => {
+    setQuestionsLoading(true);
+    setQuestionsError(null);
+    try {
+      const data = await listQuestionsByAuthor(targetUserId);
+      setUserQuestions(data);
+    } catch (err: any) {
+      setQuestionsError(err?.message || 'Could not load questions.');
+    } finally {
+      setQuestionsLoading(false);
+    }
+  }, []);
+
+  const loadUserAnswers = useCallback(async (targetUserId: string) => {
+    setAnswersLoading(true);
+    setAnswersError(null);
+    try {
+      const data = await listAnswersByAuthor(targetUserId);
+      setUserAnswers(data);
+    } catch (err: any) {
+      setAnswersError(err?.message || 'Could not load answers.');
+    } finally {
+      setAnswersLoading(false);
+    }
+  }, []);
+
   const loadRelationshipState = useCallback(
     async (targetUserId: string) => {
       if (!currentUser || !targetUserId || currentUser.id === targetUserId) {
@@ -166,8 +212,13 @@ export const PublicProfilePage: React.FC = () => {
     setMoreMenuOpen(false);
     setPosts([]);
     setCollectionItems([]);
+    setUserQuestions([]);
+    setUserAnswers([]);
+    setHelperCount(0);
     setPostsError(null);
     setCollectionError(null);
+    setQuestionsError(null);
+    setAnswersError(null);
 
     try {
       const loaded = await getProfileByUsername(clean);
@@ -188,16 +239,26 @@ export const PublicProfilePage: React.FC = () => {
         setRelationship({ iFollow: false, followsMe: false, isBlocked: false });
       }
 
-      // Only load public posts and public collection when permitted
+      fetchHelperCount(loaded.id)
+        .then((count) => setHelperCount(count))
+        .catch(() => setHelperCount(0));
+
+      // Only load public posts, public collection, and Q&A when permitted
       if (loaded.isPublic) {
         setActiveTab('posts');
         await Promise.all([
           loadPosts(loaded.id),
           loadCollection(loaded.id),
+          loadUserQuestions(loaded.id),
+          loadUserAnswers(loaded.id),
         ]);
       } else if (isSelf) {
         setActiveTab('posts');
-        await loadPosts(loaded.id);
+        await Promise.all([
+          loadPosts(loaded.id),
+          loadUserQuestions(loaded.id),
+          loadUserAnswers(loaded.id),
+        ]);
       }
     } catch (err: any) {
       setProfileError(err?.message || 'Could not load profile.');
@@ -205,7 +266,7 @@ export const PublicProfilePage: React.FC = () => {
     } finally {
       setLoadingProfile(false);
     }
-  }, [username, currentUser?.id, loadPosts, loadCollection, loadRelationshipState]);
+  }, [username, currentUser?.id, loadPosts, loadCollection, loadUserQuestions, loadUserAnswers, loadRelationshipState]);
 
   useEffect(() => {
     loadProfile();
@@ -774,14 +835,38 @@ export const PublicProfilePage: React.FC = () => {
                     </p>
                   </button>
                 </div>
+
+                {/* Helped identify count (hidden on other people's profiles when 0) */}
+                {(isOwnProfile || helperCount > 0) && (
+                  <div className="p-3 rounded-2xl bg-surface-container-lowest border border-outline-variant/20 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-secondary-container/60 text-on-secondary-container flex items-center justify-center shrink-0">
+                        <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
+                          verified
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-label-md text-xs text-on-surface font-bold">
+                          Helped identify
+                        </p>
+                        <p className="font-body-sm text-[11px] text-on-surface-variant">
+                          times a best answer
+                        </p>
+                      </div>
+                    </div>
+                    <span className="font-headline-sm text-xl text-primary font-bold tabular-nums shrink-0">
+                      {helperCount}
+                    </span>
+                  </div>
+                )}
               </div>
 
-              {/* Tabs: Posts | Collection (Collection only when is_public is true) */}
-              <div className="flex bg-surface-container-low p-1 rounded-full gap-1">
+              {/* Tabs: Posts | Collection (when public) | Questions | Answers */}
+              <div className="flex flex-wrap sm:flex-nowrap bg-surface-container-low p-1 rounded-2xl sm:rounded-full gap-1">
                 <button
                   type="button"
                   onClick={() => setActiveTab('posts')}
-                  className={`flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md transition-all ${
+                  className={`flex-1 min-w-[72px] py-1.5 px-3 rounded-full font-label-md text-label-md transition-all ${
                     activeTab === 'posts'
                       ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                       : 'text-on-surface-variant hover:text-on-surface'
@@ -793,7 +878,7 @@ export const PublicProfilePage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setActiveTab('collection')}
-                    className={`flex-1 py-1.5 px-3 rounded-full font-label-md text-label-md transition-all ${
+                    className={`flex-1 min-w-[72px] py-1.5 px-3 rounded-full font-label-md text-label-md transition-all ${
                       activeTab === 'collection'
                         ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
                         : 'text-on-surface-variant hover:text-on-surface'
@@ -802,6 +887,28 @@ export const PublicProfilePage: React.FC = () => {
                     Collection
                   </button>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('questions')}
+                  className={`flex-1 min-w-[72px] py-1.5 px-3 rounded-full font-label-md text-label-md transition-all ${
+                    activeTab === 'questions'
+                      ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
+                      : 'text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  Questions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('answers')}
+                  className={`flex-1 min-w-[72px] py-1.5 px-3 rounded-full font-label-md text-label-md transition-all ${
+                    activeTab === 'answers'
+                      ? 'bg-surface-container-lowest text-primary font-bold shadow-sm'
+                      : 'text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  Answers
+                </button>
               </div>
 
               {/* Posts Tab */}
@@ -949,6 +1056,26 @@ export const PublicProfilePage: React.FC = () => {
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Questions Tab */}
+              {activeTab === 'questions' && (
+                <ProfileQuestionsTab
+                  questions={userQuestions}
+                  loading={questionsLoading}
+                  error={questionsError}
+                  onRetry={() => loadUserQuestions(profile.id)}
+                />
+              )}
+
+              {/* Answers Tab */}
+              {activeTab === 'answers' && (
+                <ProfileAnswersTab
+                  answers={userAnswers}
+                  loading={answersLoading}
+                  error={answersError}
+                  onRetry={() => loadUserAnswers(profile.id)}
+                />
               )}
             </div>
           )}

@@ -1,28 +1,36 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef } from 'react';
 import { HashRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 import { HomePage } from './pages/HomePage';
-import { ExplorePage } from './pages/ExplorePage';
-import { SpeciesDetailPage } from './pages/SpeciesDetailPage';
-import { ScannerPage } from './pages/ScannerPage';
-import { ComparisonPage } from './pages/ComparisonPage';
-import { LifecyclePage } from './pages/LifecyclePage';
-import { HealthCheckerPage } from './pages/HealthCheckerPage';
-import { CollectionPage } from './pages/CollectionPage';
-import { ProfilePage } from './pages/ProfilePage';
 import { OnboardingPage } from './pages/OnboardingPage';
-import { FeedPage } from './pages/FeedPage';
-import { InviteFriendsPage } from './pages/InviteFriendsPage';
-import { SharedCollectionPage } from './pages/SharedCollectionPage';
-import { JoinAlbumPage } from './pages/JoinAlbumPage';
-import { LeaderboardPage } from './pages/LeaderboardPage';
-import { SettingsPage } from './pages/SettingsPage';
 import { LoginPage } from './pages/LoginPage';
-import { PublicProfilePage } from './pages/PublicProfilePage';
-import { MessagesPage } from './pages/MessagesPage';
-import { ChatPage } from './pages/ChatPage';
-import { CarePage } from './pages/CarePage';
-import { CareDetailPage } from './pages/CareDetailPage';
+
+const ExplorePage = lazy(() => import('./pages/ExplorePage').then((m) => ({ default: m.ExplorePage })));
+const SpeciesDetailPage = lazy(() => import('./pages/SpeciesDetailPage').then((m) => ({ default: m.SpeciesDetailPage })));
+const ScannerPage = lazy(() => import('./pages/ScannerPage').then((m) => ({ default: m.ScannerPage })));
+const ComparisonPage = lazy(() => import('./pages/ComparisonPage').then((m) => ({ default: m.ComparisonPage })));
+const LifecyclePage = lazy(() => import('./pages/LifecyclePage').then((m) => ({ default: m.LifecyclePage })));
+const HealthCheckerPage = lazy(() => import('./pages/HealthCheckerPage').then((m) => ({ default: m.HealthCheckerPage })));
+const CollectionPage = lazy(() => import('./pages/CollectionPage').then((m) => ({ default: m.CollectionPage })));
+const ProfilePage = lazy(() => import('./pages/ProfilePage').then((m) => ({ default: m.ProfilePage })));
+const FeedPage = lazy(() => import('./pages/FeedPage').then((m) => ({ default: m.FeedPage })));
+const InviteFriendsPage = lazy(() => import('./pages/InviteFriendsPage').then((m) => ({ default: m.InviteFriendsPage })));
+const SharedCollectionPage = lazy(() => import('./pages/SharedCollectionPage').then((m) => ({ default: m.SharedCollectionPage })));
+const JoinAlbumPage = lazy(() => import('./pages/JoinAlbumPage').then((m) => ({ default: m.JoinAlbumPage })));
+const LeaderboardPage = lazy(() => import('./pages/LeaderboardPage').then((m) => ({ default: m.LeaderboardPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const PublicProfilePage = lazy(() => import('./pages/PublicProfilePage').then((m) => ({ default: m.PublicProfilePage })));
+const MessagesPage = lazy(() => import('./pages/MessagesPage').then((m) => ({ default: m.MessagesPage })));
+const ChatPage = lazy(() => import('./pages/ChatPage').then((m) => ({ default: m.ChatPage })));
+const CarePage = lazy(() => import('./pages/CarePage').then((m) => ({ default: m.CarePage })));
+const CareDetailPage = lazy(() => import('./pages/CareDetailPage').then((m) => ({ default: m.CareDetailPage })));
+const AskPage = lazy(() => import('./pages/AskPage').then((m) => ({ default: m.AskPage })));
+const AskDetailPage = lazy(() => import('./pages/AskDetailPage').then((m) => ({ default: m.AskDetailPage })));
+const LifeListPage = lazy(() => import('./pages/LifeListPage').then((m) => ({ default: m.LifeListPage })));
+const LifeListDetailPage = lazy(() => import('./pages/LifeListDetailPage').then((m) => ({ default: m.LifeListDetailPage })));
+const YearReviewPage = lazy(() => import('./pages/YearReviewPage').then((m) => ({ default: m.YearReviewPage })));
+const SafetyPage = lazy(() => import('./pages/SafetyPage').then((m) => ({ default: m.SafetyPage })));
+const SafetyDetailPage = lazy(() => import('./pages/SafetyDetailPage').then((m) => ({ default: m.SafetyDetailPage })));
 
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
@@ -151,33 +159,53 @@ function AppContent() {
     <HashRouter>
       <PendingInviteRedirect enabled={Boolean(currentUser && userProfile?.onboardingCompleted)} />
       <AuthModal />
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/explore" element={<ExplorePage />} />
-          <Route path="/species/:id" element={<SpeciesDetailPage />} />
-          <Route path="/scan" element={<ScannerPage />} />
-          <Route path="/compare" element={<ComparisonPage />} />
-          <Route path="/lifecycle" element={<LifecyclePage />} />
-          <Route path="/health" element={<HealthCheckerPage />} />
-          <Route path="/collection" element={<CollectionPage />} />
-          <Route path="/care" element={<CarePage />} />
-          <Route path="/care/:id" element={<CareDetailPage />} />
-          <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/u/:username" element={<PublicProfilePage />} />
-          <Route path="/messages" element={<MessagesPage />} />
-          <Route path="/messages/:conversationId" element={<ChatPage />} />
-          <Route path="/feed" element={<FeedPage />} />
-          <Route path="/invite" element={<InviteFriendsPage />} />
-          <Route path="/shared-collection" element={<SharedCollectionPage />} />
-          <Route path="/shared-collection/:albumId" element={<SharedCollectionPage />} />
-          <Route path="/join/:code" element={<JoinAlbumPage />} />
-          <Route path="/leaderboard" element={<LeaderboardPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/onboarding" element={<OnboardingPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
+      <Suspense
+        fallback={
+          <div className="min-h-screen bg-surface flex items-center justify-center p-6">
+            <div className="flex items-center gap-2.5 text-primary font-label-md">
+              <span className="material-symbols-outlined text-[22px] animate-spin">
+                progress_activity
+              </span>
+              <span>Loading...</span>
+            </div>
+          </div>
+        }
+      >
+        <Routes>
+          <Route element={<AppLayout />}>
+            <Route path="/" element={<HomePage />} />
+            <Route path="/explore" element={<ExplorePage />} />
+            <Route path="/species/:id" element={<SpeciesDetailPage />} />
+            <Route path="/scan" element={<ScannerPage />} />
+            <Route path="/compare" element={<ComparisonPage />} />
+            <Route path="/lifecycle" element={<LifecyclePage />} />
+            <Route path="/health" element={<HealthCheckerPage />} />
+            <Route path="/collection" element={<CollectionPage />} />
+            <Route path="/life-list" element={<LifeListPage />} />
+            <Route path="/life-list/:itemId" element={<LifeListDetailPage />} />
+            <Route path="/year-review" element={<YearReviewPage />} />
+            <Route path="/care" element={<CarePage />} />
+            <Route path="/care/:id" element={<CareDetailPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/u/:username" element={<PublicProfilePage />} />
+            <Route path="/messages" element={<MessagesPage />} />
+            <Route path="/messages/:conversationId" element={<ChatPage />} />
+            <Route path="/feed" element={<FeedPage />} />
+            <Route path="/ask" element={<AskPage />} />
+            <Route path="/ask/:id" element={<AskDetailPage />} />
+            <Route path="/safety" element={<SafetyPage />} />
+            <Route path="/safety/:slug" element={<SafetyDetailPage />} />
+            <Route path="/invite" element={<InviteFriendsPage />} />
+            <Route path="/shared-collection" element={<SharedCollectionPage />} />
+            <Route path="/shared-collection/:albumId" element={<SharedCollectionPage />} />
+            <Route path="/join/:code" element={<JoinAlbumPage />} />
+            <Route path="/leaderboard" element={<LeaderboardPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/onboarding" element={<OnboardingPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </Suspense>
     </HashRouter>
   );
 }

@@ -676,6 +676,20 @@ export const CareDetailPage: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {subject.kind === 'pet' && (
+          <div className="no-print mt-3.5 pt-3 border-t border-outline-variant/20 flex flex-wrap items-center justify-between gap-2">
+            <Link
+              to="/safety/pet-poison-foods"
+              className="inline-flex items-center gap-1.5 px-4 py-2 min-h-[44px] rounded-full bg-error-container/45 hover:bg-error-container/70 text-on-error-container border border-error/30 font-label-md text-xs font-semibold transition-colors"
+            >
+              <span className="material-symbols-outlined text-[17px] text-error" aria-hidden="true">
+                health_and_safety
+              </span>
+              <span>Foods dangerous for pets</span>
+            </Link>
+          </div>
+        )}
       </section>
 
       {/* Tabs */}

@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -491,10 +492,18 @@ app.post('/api/companion', async (req, res) => {
 
 // Setup Vite middleware in dev or static serve in prod
 async function startServer() {
+  const httpServer = http.createServer(app);
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr:
+          process.env.DISABLE_HMR === 'true'
+            ? false
+            : { server: httpServer },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -505,7 +514,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`WildDex full-stack server running on http://0.0.0.0:${PORT}`);
   });
 }

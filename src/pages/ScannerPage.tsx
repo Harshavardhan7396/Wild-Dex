@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   scanSpecimenImage,
   compressImage,
@@ -29,6 +29,11 @@ import {
 } from '../utils/formatters';
 import { CareSubjectFormModal, CareSubjectPrefill } from '../components/care/CareSubjectFormModal';
 import { CareSubject, inferCareKindFromCategory } from '../services/careService';
+import {
+  AskQuestionFormModal,
+  AskQuestionPrefill,
+} from '../components/ask/AskQuestionFormModal';
+import { AskQuestion, mapScanCategoryToAskCategory } from '../services/askService';
 
 export const ScannerPage: React.FC = () => {
   const navigate = useNavigate();
@@ -72,6 +77,8 @@ export const ScannerPage: React.FC = () => {
   const [includeGps, setIncludeGps] = useState(true);
   const [careModalOpen, setCareModalOpen] = useState(false);
   const [carePrefill, setCarePrefill] = useState<CareSubjectPrefill | null>(null);
+  const [askModalOpen, setAskModalOpen] = useState(false);
+  const [askPrefill, setAskPrefill] = useState<AskQuestionPrefill | null>(null);
   const [isSavingToDex, setIsSavingToDex] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selectedAlbumId, setSelectedAlbumId] = useState('default');
@@ -971,12 +978,43 @@ export const ScannerPage: React.FC = () => {
                 <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-semibold">
                   {scanResult.taxonomicRank === 'species' ? 'Exact Match' : 'Family Group'}
                 </span>
-                {scanResult.safetyFlags.endangered && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-error-container text-on-error-container font-label-sm text-[11px] font-semibold">
-                    <span>In Danger</span>
-                    <InfoTooltip text={getConservationMeaning('EN')} />
-                  </span>
-                )}
+                {(() => {
+                  const rawFlags: any = scanResult.safetyFlags;
+                  const flagList = Array.isArray(rawFlags)
+                    ? rawFlags.map((f: any) => String(f || '').trim().toLowerCase())
+                    : [];
+                  const isVenomous = Boolean(rawFlags?.venomous || flagList.includes('venomous'));
+                  const isToxic = Boolean(rawFlags?.toxic || flagList.includes('toxic') || flagList.includes('poisonous'));
+                  const isEndangered = Boolean(rawFlags?.endangered || flagList.includes('endangered'));
+                  const isInvasive = Boolean(rawFlags?.invasive || flagList.includes('invasive'));
+                  return (
+                    <>
+                      {isVenomous && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-error-container text-on-error-container border border-error/35 font-label-sm text-[11px] font-bold">
+                          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">warning</span>
+                          <span>Venomous: do not touch</span>
+                        </span>
+                      )}
+                      {isToxic && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-error-container text-on-error-container border border-error/35 font-label-sm text-[11px] font-bold">
+                          <span className="material-symbols-outlined text-[13px]" aria-hidden="true">science</span>
+                          <span>Poisonous: do not eat</span>
+                        </span>
+                      )}
+                      {isEndangered && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-label-sm text-[11px] font-semibold">
+                          <span>Endangered: protect</span>
+                          <InfoTooltip text={getConservationMeaning('EN')} />
+                        </span>
+                      )}
+                      {isInvasive && (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 font-label-sm text-[11px] font-semibold">
+                          <span>Invasive species</span>
+                        </span>
+                      )}
+                    </>
+                  );
+                })()}
                 {scanResult.iNatObservationsCount && (
                   <span className="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-[11px] font-medium">
                     {scanResult.iNatObservationsCount.toLocaleString()} Wild Sightings
@@ -1061,51 +1099,150 @@ export const ScannerPage: React.FC = () => {
             {scanResult.reasoning}
           </div>
 
-          {/* Safety Tips */}
-          <div className="grid grid-cols-2 gap-2">
-            {scanResult.safetyFlags.venomous ? (
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-error-container text-on-error-container">
-                <span className="material-symbols-outlined text-[18px]">warning</span>
-                <div className="flex flex-col min-w-0">
-                  <span className="font-label-sm text-[11px] font-bold leading-none">Poisonous Bite or Sting</span>
-                  <span className="font-body-sm text-[10px] opacity-90 truncate">Stay back safely</span>
-                </div>
-              </div>
-            ) : scanResult.safetyFlags.toxic ? (
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-tertiary-fixed text-on-tertiary-fixed">
-                <span className="material-symbols-outlined text-[18px] text-tertiary">science</span>
-                <div className="flex flex-col min-w-0">
-                  <span className="font-label-sm text-[11px] font-bold leading-none">Poisonous to Touch or Eat</span>
-                  <span className="font-body-sm text-[10px] text-on-tertiary-fixed-variant truncate">
-                    Do not touch or eat
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 p-2.5 rounded-xl bg-secondary-fixed text-on-secondary-fixed">
-                <span className="material-symbols-outlined text-[18px] text-secondary">check_circle</span>
-                <div className="flex flex-col min-w-0">
-                  <span className="font-label-sm text-[11px] font-bold leading-none">Safe from Venom</span>
-                  <span className="font-body-sm text-[10px] opacity-90 truncate">No poisonous bite or sting</span>
-                </div>
-              </div>
-            )}
+          {/* Safety Flag & Category Guidance Links, Yellow Caution Box, and Low-Confidence Flag Warning */}
+          {(() => {
+            const rawFlags: any = scanResult.safetyFlags;
+            const flagList = Array.isArray(rawFlags)
+              ? rawFlags.map((f: any) => String(f || '').trim().toLowerCase())
+              : [];
+            const isVenomous = Boolean(rawFlags?.venomous || flagList.includes('venomous'));
+            const isToxic = Boolean(rawFlags?.toxic || flagList.includes('toxic') || flagList.includes('poisonous'));
+            const isEndangered = Boolean(rawFlags?.endangered || flagList.includes('endangered'));
+            const isInvasive = Boolean(rawFlags?.invasive || flagList.includes('invasive'));
+            const hasAnyFlag = isVenomous || isToxic || isEndangered || isInvasive;
 
-            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-surface-container-high text-on-surface">
-              <span className="material-symbols-outlined text-[18px] text-primary">eco</span>
-              <div className="flex flex-col min-w-0">
-                <div className="flex items-center gap-1">
-                  <span className="font-label-sm text-[11px] font-bold leading-none">
-                    {scanResult.safetyFlags.endangered ? 'In Danger' : 'Not in Danger'}
-                  </span>
-                  <InfoTooltip text={getConservationMeaning(scanResult.safetyFlags.endangered ? 'EN' : 'LC')} iconSize={12} />
+            const cat = (scanResult.category || '').trim().toLowerCase();
+            const combinedName = `${scanResult.commonName || ''} ${scanResult.scientificName || ''}`.toLowerCase();
+            const suggestsSnake = /\b(snake|viper|cobra|python|boa|rattlesnake|mamba|adder|krait|taipan|copperhead|cottonmouth|moccasin|asp|anaconda|crotalus|vipera|naja)\b/i.test(
+              combinedName
+            );
+
+            const venomousSafetyRoute =
+              cat === 'reptiles' || cat === 'reptile' || suggestsSnake
+                ? '/safety/snakebite'
+                : cat === 'insects' || cat === 'insect' || cat === 'arachnid' || cat === 'arachnids'
+                ? '/safety/scorpion-spider'
+                : '/safety';
+
+            const toxicSafetyRoute =
+              cat === 'plants' || cat === 'plant'
+                ? '/safety/poisonous-plant'
+                : cat === 'fungi' || cat === 'fungus' || cat === 'mushroom' || cat === 'mushrooms'
+                ? '/safety/wild-mushroom'
+                : '/safety';
+
+            const isFungi = cat === 'fungi' || cat === 'fungus';
+            const isPlant = cat === 'plants' || cat === 'plant';
+            const isReptile = cat === 'reptiles' || cat === 'reptile';
+
+            const yellowNoticeText = isFungi
+              ? 'Never eat a wild mushroom because of an app. Ask a local expert.'
+              : isPlant
+              ? 'Never eat a wild plant because of an app. Ask a local expert.'
+              : isReptile
+              ? 'Never touch or handle a wild reptile because of an app. Ask a local expert.'
+              : null;
+
+            return (
+              <>
+                {isLowConfidence && hasAnyFlag && (
+                  <div className="p-3.5 rounded-2xl bg-error-container/60 border border-error/40 flex items-start gap-2.5 text-on-error-container">
+                    <span className="material-symbols-outlined text-[20px] text-error shrink-0 mt-0.5" aria-hidden="true">
+                      gpp_maybe
+                    </span>
+                    <p className="font-label-md text-xs sm:text-sm font-bold leading-relaxed">
+                      Not sure about this match. Treat it as dangerous until an expert checks.
+                    </p>
+                  </div>
+                )}
+
+                {!scanResult.notASpecies && yellowNoticeText && (
+                  <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-2.5">
+                    <span className="material-symbols-outlined text-[20px] text-amber-700 shrink-0 mt-0.5" aria-hidden="true">
+                      warning
+                    </span>
+                    <p className="font-body-sm text-xs sm:text-sm font-semibold leading-relaxed">
+                      {yellowNoticeText}
+                    </p>
+                  </div>
+                )}
+
+                {(isVenomous || isToxic) && (
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    {isVenomous && (
+                      <Link
+                        to={venomousSafetyRoute}
+                        className="flex-1 min-h-[44px] px-4 py-2.5 rounded-full bg-error text-on-error font-label-md text-xs sm:text-sm font-bold shadow-sm hover:opacity-95 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2"
+                      >
+                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                          medical_services
+                        </span>
+                        <span>What to do if bitten</span>
+                      </Link>
+                    )}
+
+                    {isToxic && (
+                      <Link
+                        to={toxicSafetyRoute}
+                        className="flex-1 min-h-[44px] px-4 py-2.5 rounded-full bg-error-container text-on-error-container border border-error/35 font-label-md text-xs sm:text-sm font-bold hover:opacity-95 active:scale-[0.98] transition-all inline-flex items-center justify-center gap-2"
+                      >
+                        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                          health_and_safety
+                        </span>
+                        <span>Poison safety steps</span>
+                      </Link>
+                    )}
+                  </div>
+                )}
+
+                {/* Safety Tips */}
+                <div className="grid grid-cols-2 gap-2">
+                  {isVenomous ? (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-error-container text-on-error-container">
+                      <span className="material-symbols-outlined text-[18px]">warning</span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-label-sm text-[11px] font-bold leading-none">Venomous: do not touch</span>
+                        <span className="font-body-sm text-[10px] opacity-90 truncate">Stay back safely</span>
+                      </div>
+                    </div>
+                  ) : isToxic ? (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-error-container text-on-error-container">
+                      <span className="material-symbols-outlined text-[18px]">science</span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-label-sm text-[11px] font-bold leading-none">Poisonous: do not eat</span>
+                        <span className="font-body-sm text-[10px] opacity-90 truncate">
+                          Do not touch or eat
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-secondary-fixed text-on-secondary-fixed">
+                      <span className="material-symbols-outlined text-[18px] text-secondary">check_circle</span>
+                      <div className="flex flex-col min-w-0">
+                        <span className="font-label-sm text-[11px] font-bold leading-none">Safe from Venom</span>
+                        <span className="font-body-sm text-[10px] opacity-90 truncate">No poisonous bite or sting</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-surface-container-high text-on-surface">
+                    <span className="material-symbols-outlined text-[18px] text-primary">eco</span>
+                    <div className="flex flex-col min-w-0">
+                      <div className="flex items-center gap-1">
+                        <span className="font-label-sm text-[11px] font-bold leading-none">
+                          {isEndangered ? 'In Danger' : 'Not in Danger'}
+                        </span>
+                        <InfoTooltip text={getConservationMeaning(isEndangered ? 'EN' : 'LC')} iconSize={12} />
+                      </div>
+                      <span className="font-body-sm text-[10px] text-on-surface-variant truncate">
+                        {isEndangered ? 'Needs protection' : 'Common, Not in Danger'}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                <span className="font-body-sm text-[10px] text-on-surface-variant truncate">
-                  {scanResult.safetyFlags.endangered ? 'Needs protection' : 'Common, Not in Danger'}
-                </span>
-              </div>
-            </div>
-          </div>
+              </>
+            );
+          })()}
 
           {/* Fun Facts */}
           <div className="grid grid-cols-2 gap-2.5">
@@ -1290,6 +1427,52 @@ export const ScannerPage: React.FC = () => {
               <span>Add to My Care</span>
             </button>
           )}
+
+          {(capturedImage || (scanResult.enrichedPhotos && scanResult.enrichedPhotos[0])) && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!currentUser) {
+                  setAuthModalOpen(true);
+                  showToast('Please sign in to ask the community');
+                  return;
+                }
+                const photoSourceUrl =
+                  capturedImage || (scanResult.enrichedPhotos && scanResult.enrichedPhotos[0]) || '';
+                const category = mapScanCategoryToAskCategory(scanResult.category);
+                const rawName = (scanResult.commonName || '').trim();
+                const title =
+                  !scanResult.notASpecies &&
+                  rawName &&
+                  rawName.toLowerCase() !== 'unknown'
+                    ? `Is this a ${rawName}?`.slice(0, 120)
+                    : 'What is this?';
+                setAskPrefill({
+                  photoSourceUrl,
+                  category,
+                  title,
+                });
+                setAskModalOpen(true);
+              }}
+              className="w-full min-h-[44px] px-4 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
+            >
+              <span className="material-symbols-outlined text-[18px]">help</span>
+              <span>Ask the community</span>
+            </button>
+          )}
+
+          {/* Scan Result Footer: Safety Guide Link on every scan */}
+          <div className="pt-2 border-t border-outline-variant/20 flex items-center justify-center">
+            <Link
+              to="/safety"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-full text-xs font-semibold text-on-surface-variant hover:text-primary transition-colors"
+            >
+              <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+                health_and_safety
+              </span>
+              <span>Safety Guide</span>
+            </Link>
+          </div>
         </section>
       )}
 
@@ -1621,6 +1804,17 @@ export const ScannerPage: React.FC = () => {
         onSaved={(saved: CareSubject) => {
           setCareModalOpen(false);
           showToast(`Added ${saved.name} to My Care`);
+        }}
+      />
+
+      <AskQuestionFormModal
+        isOpen={askModalOpen}
+        questionToEdit={null}
+        prefill={askPrefill}
+        onClose={() => setAskModalOpen(false)}
+        onSaved={(_saved: AskQuestion) => {
+          setAskModalOpen(false);
+          showToast('Posted to Ask the community');
         }}
       />
     </div>

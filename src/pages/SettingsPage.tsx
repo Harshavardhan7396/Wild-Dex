@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { fetchMyUserPrivate, UserPrivateData } from '../services/userPrivateService';
 import { deleteAllCareData } from '../services/careService';
+import { deleteAllAskData } from '../services/askService';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -18,6 +19,9 @@ export const SettingsPage: React.FC = () => {
   const [showDeleteCareModal, setShowDeleteCareModal] = useState(false);
   const [deletingCareData, setDeletingCareData] = useState(false);
   const [deleteCareError, setDeleteCareError] = useState<string | null>(null);
+  const [showDeleteAskModal, setShowDeleteAskModal] = useState(false);
+  const [deletingAskData, setDeletingAskData] = useState(false);
+  const [deleteAskError, setDeleteAskError] = useState<string | null>(null);
   const [clearingPrefs, setClearingPrefs] = useState(false);
   const [prefsError, setPrefsError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -115,6 +119,23 @@ export const SettingsPage: React.FC = () => {
       );
     } finally {
       setDeletingCareData(false);
+    }
+  };
+
+  const handleDeleteAllAskData = async () => {
+    if (!currentUser || deletingAskData) return;
+    setDeletingAskData(true);
+    setDeleteAskError(null);
+    try {
+      await deleteAllAskData();
+      setShowDeleteAskModal(false);
+      showToast('All your questions and answers have been deleted');
+    } catch (err: any) {
+      setDeleteAskError(
+        err?.message || 'Could not delete your questions and answers. Please try again.'
+      );
+    } finally {
+      setDeletingAskData(false);
     }
   };
 
@@ -423,6 +444,20 @@ export const SettingsPage: React.FC = () => {
           </button>
         )}
 
+        {currentUser && (
+          <button
+            type="button"
+            onClick={() => {
+              setDeleteAskError(null);
+              setShowDeleteAskModal(true);
+            }}
+            className="w-full min-h-[44px] px-4 rounded-full bg-surface-container text-error font-label-md text-label-md font-semibold flex items-center justify-center gap-2 hover:bg-error-container/25"
+          >
+            <span className="material-symbols-outlined text-[18px]">delete_sweep</span>
+            <span>Delete all my questions and answers</span>
+          </button>
+        )}
+
         <button
           onClick={() => setShowDeleteModal(true)}
           className="w-full h-11 rounded-full bg-error-container text-on-error-container font-label-md text-label-md font-bold flex items-center justify-center gap-2 mt-2"
@@ -498,6 +533,78 @@ export const SettingsPage: React.FC = () => {
                   </span>
                 )}
                 <span>{deletingCareData ? 'Deleting...' : 'Delete'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete All Questions and Answers Confirmation Modal */}
+      {showDeleteAskModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => {
+            if (!deletingAskData) {
+              setShowDeleteAskModal(false);
+              setDeleteAskError(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Delete all my questions and answers"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-surface-container p-6 shadow-2xl flex flex-col gap-4 text-center border border-outline-variant/30"
+          >
+            <div className="w-14 h-14 rounded-full bg-error-container text-on-error-container flex items-center justify-center mx-auto">
+              <span className="material-symbols-outlined text-[28px]">warning</span>
+            </div>
+            <div>
+              <h3 className="font-headline-sm text-headline-sm text-on-surface">
+                Delete all my questions and answers?
+              </h3>
+              <p className="font-body-sm text-body-sm text-on-surface-variant mt-1">
+                This will permanently delete all your questions, answers, and question photos in Ask the community. This cannot be undone.
+              </p>
+            </div>
+            {deleteAskError && (
+              <div className="p-3 rounded-xl bg-error-container/30 border border-error/35 text-xs text-on-error-container flex items-center justify-between gap-2 text-left">
+                <span>{deleteAskError}</span>
+                <button
+                  type="button"
+                  disabled={deletingAskData}
+                  onClick={handleDeleteAllAskData}
+                  className="px-2.5 py-1 rounded-full bg-surface text-primary font-semibold border border-outline-variant/40 shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                disabled={deletingAskData}
+                onClick={() => {
+                  setShowDeleteAskModal(false);
+                  setDeleteAskError(null);
+                }}
+                className="flex-1 h-11 rounded-full bg-surface-container-high text-on-surface font-label-md text-label-md font-semibold disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingAskData}
+                onClick={handleDeleteAllAskData}
+                className="flex-1 h-11 rounded-full bg-error text-on-error font-label-md text-label-md font-bold disabled:opacity-60 inline-flex items-center justify-center gap-1.5"
+              >
+                {deletingAskData && (
+                  <span className="material-symbols-outlined text-[18px] animate-spin">
+                    progress_activity
+                  </span>
+                )}
+                <span>{deletingAskData ? 'Deleting...' : 'Delete'}</span>
               </button>
             </div>
           </div>

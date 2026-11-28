@@ -508,13 +508,32 @@ export async function scanSpecimenImage(
       ),
       taxonomicRank: payload.taxonomicRank || (payload.scientificName?.includes(' sp.') ? 'genus' : 'species'),
       reasoning: payload.reasoning || `Morphological traits analyzed with ${(((payload.confidence ?? 0.85)) * 100).toFixed(0)}% confidence score.`,
-      safetyFlags: {
-        venomous: Boolean(payload.safetyFlags?.venomous),
-        toxic: Boolean(payload.safetyFlags?.toxic),
-        endangered: Boolean(payload.safetyFlags?.endangered),
-        invasive: Boolean(payload.safetyFlags?.invasive),
-        harmless: Boolean(payload.safetyFlags?.harmless ?? (!payload.safetyFlags?.venomous && !payload.safetyFlags?.toxic)),
-      },
+      safetyFlags: (() => {
+        const raw = payload.safetyFlags as any;
+        if (Array.isArray(raw)) {
+          const lowerSet = new Set(raw.map((s: any) => String(s || '').trim().toLowerCase()));
+          const venomous = lowerSet.has('venomous');
+          const toxic = lowerSet.has('toxic') || lowerSet.has('poisonous');
+          const endangered = lowerSet.has('endangered');
+          const invasive = lowerSet.has('invasive');
+          return {
+            venomous,
+            toxic,
+            endangered,
+            invasive,
+            harmless: lowerSet.has('harmless') || (!venomous && !toxic),
+          };
+        }
+        const venomous = Boolean(raw?.venomous);
+        const toxic = Boolean(raw?.toxic);
+        return {
+          venomous,
+          toxic,
+          endangered: Boolean(raw?.endangered),
+          invasive: Boolean(raw?.invasive),
+          harmless: Boolean(raw?.harmless ?? (!venomous && !toxic)),
+        };
+      })(),
       top3AlternateMatches: (payload.alternateMatches || payload.top3AlternateMatches || []).map((m: any) => ({
         commonName: m.commonName || m.name || '',
         scientificName: m.scientificName || '',
